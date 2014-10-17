@@ -41,4 +41,7 @@ instance ToScheduler ServusScheduler where
         return ()
 
 main = do
-    ...
+    -- TODO: jobDefs must be shared between main thread and scheduler ... or maybe don't belong in scheduler at all...
+    scheduler <- ServusScheduler "servus" (emptyMap :: M.Map JobName ServusJob) readyJobs activeJobs expiredJobs
+    forkScheduler
+
