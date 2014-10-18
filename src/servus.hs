@@ -1,47 +1,35 @@
-{-# LANGUAGE OverloadedStrings #-}
 module Main where
 
-import           Control.Concurrent.STM
-import qualified Data.ByteString.Char8  as C
-import qualified Data.Map               as M
-import           System.Mesos.Scheduler
+import           Control.Applicative
+import           Control.Monad.STM
+import           Control.Monad.Loops.STM
+import           Control.Concurrent.STM.TMVar
+import           Data.List
+import           Debug.Trace
 
-data ServusJob = ServusJob
-    { _sjName        :: JobName
-    , _sjConstraints :: JobConstraintExpr
+-- | Drive the main scheduler loop. The server continuously will
+-- pull out of the set of expired jobs any which are requesting to
+-- be scheduled again. The remaining expired jobs are logged out and
+-- discarded.
+schedulerLoop s = waitForTrue $ do
+    (pendingJobs, expiredJobs) <- partitionExpiredJobs
+    traceShow pendingJobs $ return ()
+    traceShow expiredJobs $ return ()
+    schedulePendingJobs pendingJobs
+    isEmptyTMVar (readyJobs s)
+  where
+    partitionExpiredJobs = takeTMVar (expiredJobs s) >>= \e -> return $ partition nextReadyJob e
+    schedulePendingJobs pendingJobs = do
+        r <- takeTMVar (readyJobs s) `orElse` return []
+        putTMVar (readyJobs s) (r ++ pendingJobs)
+    nextReadyJob = (== "a")
+
+data Servus = Servus
+    { readyJobs   :: TMVar [String]
+    , activeJobs  :: TMVar [String]
+    , expiredJobs :: TMVar [String]
     }
-  deriving (Show)
-
-readyJobs   = newTVarIO :: IO (TVar JobConstraintMinHeap)
-activeJobs  = newTVarIO :: IO (TVar [ActiveServusJob])
-expiredJobs = newTVarIO :: IO (TVar [ExpiredServusJob])
-
-data ServusScheduler = ServusScheduler
-    { _ssJobDefs     :: M.Map JobName ServusJob
-    , _ssReadyJobs   :: IO (TVar JobConstraintMinHeap)
-    , _ssActiveJobs  :: IO (TVar [ActiveJobs])
-    , _ssExpiredJobs :: IO (TVar [ExpiredServusJob])
-    }
-
-instance ToScheduler ServusScheduler where
-    registered _ _ _ _ _ = putStrLn "register"
-
-    resourceOffers s driver offers = do
-        forM_ offers $ \offer -> do
-            case (matchOffer offer $ _ssReadyJobs s) of
-                MatchedOffer job -> do
-                    status <- launchTasks
-                        driver
-                        [ offerID offer ]
-                        ...
-                    putStrLn "Launched job " ++ (_sjName job)
-                _                -> do
-                    declineOffer driver (offerID offer) filters -- TODO: WTF is filters?
-                    putStrLn "Declined offer " ++ (show $ offerID offer)
-        return ()
 
 main = do
-    -- TODO: jobDefs must be shared between main thread and scheduler ... or maybe don't belong in scheduler at all...
-    scheduler <- ServusScheduler "servus" (emptyMap :: M.Map JobName ServusJob) readyJobs activeJobs expiredJobs
-    forkScheduler
-
+    servus <- Servus <$> newEmptyTMVarIO <*> newEmptyTMVarIO <*> (newTMVarIO ["a","b"])
+    atomically $ schedulerLoop servus
