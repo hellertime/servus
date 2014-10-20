@@ -22,6 +22,18 @@ import           System.Mesos.Resources
 import           System.Mesos.Scheduler
 import           System.Mesos.Types
 
+-- | Create a skeleton task with some fields populated
+mkTaskInfo name = TaskInfo
+    { taskInfoName       = name
+    , taskID             = C.null
+    , taskSlaveID        = C.null
+    , taskResources      = []
+    , taskImplementation = TaskCommand $ CommandInfo [] Nothing (RawCommand "/bin/true") Nothing
+    , taskData           = Nothing
+    , taskContainer      = Nothing
+    , taskHealthCheck    = Nothing
+    }
+
 cpusPerTask :: Double
 cpusPerTask = 1
 
@@ -46,20 +58,32 @@ withTMVar mvar f = do
 -- be scheduled again. The remaining expired jobs are logged out and
 -- discarded.
 schedulerLoop s = do
-    pending <- trace "DEBUG EXPIRED" withTMVar (_sExpiredJobs s) $ return . swap . partition nextReadyJob
-    trace "DEBUG READY" withTMVar (_sReadyJobs s) $ return . swap . ((,) ()) . (++ pending)
+    pending <- withTMVar (_sExpiredJobs s) $ return . swap . partition nextReadyJob
+    withTMVar (_sReadyJobs s) $ return . swap . ((,) ()) . (++ pending)
   where
     nextReadyJob = (== "servus-job-1") . _sjName
 
-data ServusJob = ServusJob
-    { _sjName :: C.ByteString
+data JobTrigger = TimeInterval
+    { _jsRules :: [UTCTime] -- ^ Time interval generator
+    , _jsSlack :: UTCTime   -- ^ Allowed slack between next run and now
+    }
+
+-- | Job configuration.
+data JobOptions = JobOptions
+    { _joDisplayName :: C.ByteString -- ^ Mesos display name
+    , _joConstraints :: Set Resource -- ^ Job resource requirements
+    , _joTrigger     :: JobTrigger   -- ^ Trigger job to schedule
     }
   deriving (Show)
 
+-- | A ScheduledJob is one on the ready queue, but not yet matched by 
+-- offers from a slave.
+newtype ScheduledJob = ScheduledJob { fromScheduledJob :: JobOptions }
+
 data Servus = Servus
-    { _sReadyJobs   :: TMVar [ServusJob]
+    { _sReadyJobs   :: TMVar ![ServusJob]
     , _sActiveJobs  :: TMVar (M.Map C.ByteString ServusJob)
-    , _sExpiredJobs :: TMVar [ServusJob]
+    , _sExpiredJobs :: TMVar ![ServusJob]
     }
 
 satisfyOffer :: Servus -> Offer -> STM (Maybe ServusJob)
