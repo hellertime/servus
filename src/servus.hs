@@ -1,60 +1,91 @@
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
+
 module Main where
 
 import           Control.Applicative
+import           Control.Lens
 import           Control.Monad
 import           Control.Monad.STM
 import           Control.Monad.Loops.STM
 import           Control.Concurrent
 import           Control.Concurrent.STM.TMVar
+import qualified Data.ByteString.Char8        as C
 import           Data.List
-import           Data.Map                     as M
-import           Data.Monioid ((<>))
-import           Debug.Trace
+import qualified Data.Map.Strict              as M
+import           Data.Maybe (maybe)
+import           Data.Monoid ((<>))
+import           Data.Tuple (swap)
+import           System.Exit
+import           System.Mesos.Resources
 import           System.Mesos.Scheduler
+import           System.Mesos.Types
+
+cpusPerTask :: Double
+cpusPerTask = 1
+
+memPerTask :: Double
+memPerTask = 32
+
+requiredResources :: [Resource]
+requiredResources = [cpusPerTask ^. re cpus, memPerTask ^. re mem]
+
+executorSettings fid cmd = e { executorName = Just "Servus Executor" }
+  where
+    e = executorInfo (ExecutorID "command") fid (CommandInfo [] Nothing (ShellCommand cmd) Nothing) requiredResources
+
+withTMVar mvar f = do
+    v <- takeTMVar mvar
+    (v', a) <- f v
+    putTMVar mvar v'
+    return a
 
 -- | Drive the main scheduler loop. The server continuously will
 -- pull out of the set of expired jobs any which are requesting to
 -- be scheduled again. The remaining expired jobs are logged out and
 -- discarded.
-schedulerLoop s = do
-    expiredJobs <- tryTakeTMVar (_sExpiredJobs s)
-    readyJobs   <- tryTakeTMVar (_sReadyJobs s)
-    putTMVar (_sReadyJobs) readyJobs'
+schedulerLoop s = withTMVar (_sExpiredJobs s) $ \expiredJobs -> do
+    expiredJobs' <- rescheduleExpiredJobs expiredJobs
+    return (expiredJobs', ())
   where
-    (pendingJobs, expiredJobs') = maybe ([],[]) (partition nextReadyJob) expiredJobs
-    readyJobs' =  maybe pendingJobs (++ pendingJobs) readyJobs
-    nextReadyJob = (== "a")
+    rescheduleExpiredJobs expiredJobs = 
+        let (ps, es) = partition nextReadyJob expiredJobs
+        in
+            withTMVar (_sReadyJobs s) $ \readyJobs -> return (ps ++ readyJobs, es)
+    nextReadyJob = (== "servus-job-1") . _sjName
 
 data ServusJob = ServusJob
-    { _sjName :: String
+    { _sjName :: C.ByteString
     }
 
 data Servus = Servus
     { _sReadyJobs   :: TMVar [ServusJob]
-    , _sActiveJobs  :: TMVar (M.Map TaskID ServusJob)
+    , _sActiveJobs  :: TMVar (M.Map C.ByteString ServusJob)
     , _sExpiredJobs :: TMVar [ServusJob]
     }
 
 satisfyOffer :: Servus -> Offer -> STM (Maybe ServusJob)
-satisfyOffer s _ = case takeTMVar (_sReadyJobs s) of
-    []     -> return Nothing
-    (j:js) -> putTMVar (_sReadyJobs s) js >> return $ Just j
+satisfyOffer s _ = withTMVar (_sReadyJobs s) $ \case
+    []     -> return ([], Nothing)
+    (j:js) -> return (js, Just j)
 
-putActiveJob :: Servus -> ServusJob -> STM ()
-putActiveJob s j = do
-    activeJobs <- takeTMVar (_sActiveJobs s)
-    putTMVar (_sActiveJobs s) (j : activeJobs)
+putActiveJob :: Servus -> TaskID -> ServusJob -> STM ()
+putActiveJob s tid j = withTMVar (_sActiveJobs s) $ \activeJobs -> return (M.insert (fromTaskID tid) j activeJobs, ())
 
 takeActiveJob :: Servus -> TaskID -> STM (Maybe ServusJob)
-takeActiveJob s tid = atomically $ case takeTMVar (_sActiveJobs s) of
-    [] -> return Nothing
-    (
+takeActiveJob s tid = withTMVar (_sActiveJobs s) $ 
+    \activeJobs -> return $
+        if (M.null activeJobs)
+            then (M.empty, Nothing)
+            else swap $ M.updateLookupWithKey (const2 Nothing) (fromTaskID tid) activeJobs
+  where
+    const2 c _ _ = c
 
-expireJob :: Servus -> TaskID -> STM ServusJob
+expireJob :: Servus -> TaskID -> STM ()
 expireJob s tid = do
-    case takeTMVar (_sActiveJobs s) of
-        [] -> putTMVar
-
+    j <- takeActiveJob s tid
+    withTMVar (_sExpiredJobs s) $ 
+        \expiredJobs -> return $ (maybe expiredJobs (: expiredJobs) j, ())
 
 data ServusScheduler = ServusScheduler
     { _ssServus :: Servus
@@ -65,45 +96,53 @@ instance ToScheduler ServusScheduler where
 
     resourceOffers s driver offers = do
         forM_ offers $ \offer -> do
-            case atomically $ tryTakeTMVar (_sReadyJobs servus) of
-                Nothing        -> declineOffer driver (offerID offer) filters
-                Just readyJobs -> do
-                    readyJob <- atomically $ satisfyOffer servus offer
+            readyJob <- atomically $ satisfyOffer servus offer
+            case readyJob of
+                Nothing       -> do
+                    putStrLn "servus: offer declined no ready jobs"
+                    declineOffer driver (offerID offer) filters
+                Just readyJob -> do
+                    putStrLn "servus: offer accepted"
                     status <- launchTasks
                         driver
                         [ offerID offer ]
                         [ TaskInfo (_sjName readyJob) (TaskID "task") (offerSlaveID offer) requiredResources
-                            (TaskExecutor $ executorSettings $ offerFrameworkID offer)
+                            (TaskExecutor $ executorSettings (offerFrameworkID offer) "ps -ef")
                             Nothing
-                            Just $ CommandInfo [] Nothing "ps -ef" Nothing
+                            Nothing
                             Nothing
                         ]
-                        filters
-                    atomically $ putActiveJob readyJob
+                        (Filters Nothing)
+                    putStrLn "servus: launched task"
+                    atomically $ putActiveJob servus "task" readyJob
+                    putStrLn "servus: marked task as active"
+                    return status
         return ()
       where
         servus = (_ssServus s)
 
     statusUpdate s driver status = do
-        when (taskStatusState status == Finished) $ do
-            atomically $ do
-                expiredJobs <- takeTMVar (_sExpiredJobs servus)
-                activeJobs  <-
+        putStrLn $ "servus: task " <> show (taskStatusTaskID status) <> " is in state " <> show (taskStatusState status)
+        print status
+        when (taskStatusState status `elem` [Lost, Finished]) $ atomically $ expireJob servus (taskStatusTaskID status)
                 
       where
         servus = (_ssServus s)
 
+    errorMessage _ _ message = C.putStrLn message
+
 main = do
     servus <- Servus 
-              <$> (newTMVarIO ["a","b","c"])
-              <*> (newTMVarIO M.emptyMap)
+              <$> (newTMVarIO [ServusJob "servus-job-1"])
+              <*> (newTMVarIO M.empty)
               <*> (newTMVarIO [])
 
-    forkAtomLoop $ do
-        readyJobs   <- takeTMVar $ _sReadyJobs servus
-        expiredJobs <- tryTakeMVar $ _sExpiredJobs servus
-        putTMVar (_sExpiredJobs servus) expiredJobs'
-      where
-        expiredJobs' = maybe readyJobs (++ readyJobs) expiredJobs
+    forkAtomLoop $ schedulerLoop servus
 
-    atomLoop $ schedulerLoop servus
+    let fi = (frameworkInfo "" "Servus") { frameworkRole = Just "*" }
+    status <- withSchedulerDriver (ServusScheduler servus) fi "127.0.0.1:5050" Nothing $ \d -> do
+        status <- run d
+        stop d False
+    if status /= Stopped
+        then exitFailure
+        else exitSuccess
