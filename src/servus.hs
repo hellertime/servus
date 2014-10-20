@@ -16,6 +16,7 @@ import qualified Data.Map.Strict              as M
 import           Data.Maybe (maybe)
 import           Data.Monoid ((<>))
 import           Data.Tuple (swap)
+import           Debug.Trace
 import           System.Exit
 import           System.Mesos.Resources
 import           System.Mesos.Scheduler
@@ -44,19 +45,16 @@ withTMVar mvar f = do
 -- pull out of the set of expired jobs any which are requesting to
 -- be scheduled again. The remaining expired jobs are logged out and
 -- discarded.
-schedulerLoop s = withTMVar (_sExpiredJobs s) $ \expiredJobs -> do
-    expiredJobs' <- rescheduleExpiredJobs expiredJobs
-    return (expiredJobs', ())
+schedulerLoop s = do
+    pending <- trace "DEBUG EXPIRED" withTMVar (_sExpiredJobs s) $ return . swap . partition nextReadyJob
+    trace "DEBUG READY" withTMVar (_sReadyJobs s) $ return . swap . ((,) ()) . (++ pending)
   where
-    rescheduleExpiredJobs expiredJobs = 
-        let (ps, es) = partition nextReadyJob expiredJobs
-        in
-            withTMVar (_sReadyJobs s) $ \readyJobs -> return (ps ++ readyJobs, es)
     nextReadyJob = (== "servus-job-1") . _sjName
 
 data ServusJob = ServusJob
     { _sjName :: C.ByteString
     }
+  deriving (Show)
 
 data Servus = Servus
     { _sReadyJobs   :: TMVar [ServusJob]
@@ -95,8 +93,12 @@ instance ToScheduler ServusScheduler where
     registered _ _ _ _ = putStrLn "servus: registered"
 
     resourceOffers s driver offers = do
+        putStrLn "servus: accepting resource offers"
         forM_ offers $ \offer -> do
+            putStrLn "servus: satisfying resource offer"
+            print offer
             readyJob <- atomically $ satisfyOffer servus offer
+            print readyJob
             case readyJob of
                 Nothing       -> do
                     putStrLn "servus: offer declined no ready jobs"
@@ -107,7 +109,8 @@ instance ToScheduler ServusScheduler where
                         driver
                         [ offerID offer ]
                         [ TaskInfo (_sjName readyJob) (TaskID "task") (offerSlaveID offer) requiredResources
-                            (TaskExecutor $ executorSettings (offerFrameworkID offer) "ps -ef")
+--                            (TaskExecutor $ executorSettings (offerFrameworkID offer) "/Users/cheller/src/akamai/mesos/build/src/mesos-execute --master=127.0.0.1:5050 --command='/bin/ps -ef' --name=foo")
+                            (TaskCommand $ CommandInfo [] Nothing (ShellCommand "ps -ef") Nothing)
                             Nothing
                             Nothing
                             Nothing
@@ -124,7 +127,10 @@ instance ToScheduler ServusScheduler where
     statusUpdate s driver status = do
         putStrLn $ "servus: task " <> show (taskStatusTaskID status) <> " is in state " <> show (taskStatusState status)
         print status
-        when (taskStatusState status `elem` [Lost, Finished]) $ atomically $ expireJob servus (taskStatusTaskID status)
+        when (taskStatusState status `elem` [Lost, Finished]) $ do
+            putStrLn "servus: expiring task"
+            atomically $ expireJob servus (taskStatusTaskID status)
+            putStrLn "servus: done"
                 
       where
         servus = (_ssServus s)
