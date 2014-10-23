@@ -24,4 +24,5 @@ executable servus
                         vector,
                         text,
                         optparse-applicative >=0.11,
-                        lens
+                        lens,
+                        aeson
