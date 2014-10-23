@@ -22,4 +22,6 @@ executable servus
                         yaml >=0.8,
                         unordered-containers,
                         vector,
-                        text
+                        text,
+                        optparse-applicative >=0.11,
+                        lens
