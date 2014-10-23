@@ -17,6 +17,9 @@ executable servus
                         hs-mesos >=0.20,
                         monad-loops-stm >=0.4,
                         stm >=2.4,
-                        bytestring >=0.10,
-                        containers >=0.5.5,
-                        lens >=4.4
+                        bytestring,
+                        containers,
+                        yaml >=0.8,
+                        unordered-containers,
+                        vector,
+                        text
