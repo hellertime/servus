@@ -17,10 +17,25 @@ import           Data.Maybe (maybe)
 import           Data.Monoid ((<>))
 import           Data.Tuple (swap)
 import           Debug.Trace
+import           Options.Applicative
 import           System.Exit
 import           System.Mesos.Resources
 import           System.Mesos.Scheduler
 import           System.Mesos.Types
+
+import           Servus.Config
+import           Servus.Options
+
+main :: IO ()
+main = execParser opts >>= go
+  where
+    opts = info (helper <*> globalOptsParser) desc
+    desc = fullDesc <> progDesc "d1" <> header "h1"
+    go (GlobalOpts c) = do
+        conf <- parseServusConf c
+        print conf
+
+    {--
 
 -- | Create a skeleton task with some fields populated
 mkTaskInfo name = TaskInfo
@@ -62,11 +77,6 @@ schedulerLoop s = do
     withTMVar (_sReadyJobs s) $ return . swap . ((,) ()) . (++ pending)
   where
     nextReadyJob = (== "servus-job-1") . _sjName
-
-data JobTrigger = TimeInterval
-    { _jsRules :: [UTCTime] -- ^ Time interval generator
-    , _jsSlack :: UTCTime   -- ^ Allowed slack between next run and now
-    }
 
 -- | Job configuration.
 data JobOptions = JobOptions
@@ -161,6 +171,9 @@ instance ToScheduler ServusScheduler where
 
     errorMessage _ _ message = C.putStrLn message
 
+    --}
+
+{--
 main = do
     servus <- Servus 
               <$> (newTMVarIO [ServusJob "servus-job-1"])
@@ -176,3 +189,4 @@ main = do
     if status /= Stopped
         then exitFailure
         else exitSuccess
+--}

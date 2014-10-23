@@ -14,6 +14,9 @@ import qualified System.Mesos.Types   as M
 
 import Data.Vector (Vector)
 
+parseServusConf :: FilePath -> IO (Maybe ServusConf)
+parseServusConf = decodeFile
+
 data ServusConf = ServusConf
     { _scGlobal    :: Maybe GlobalConf
     , _scFramework :: Maybe FrameworkConf
@@ -184,11 +187,12 @@ instance FromJSON VolumeList where
     parseJSON (Array a) = VolumeList <$> mapM parseJSON (V.toList a)
 
 instance FromJSON ContainerConf where
-    parseJSON (Object o) = parseContainer $ listToMaybe $ HML.toList o
+    parseJSON = parseDocker
       where
-        parseContainer (Just ("docker", (Object d))) = do 
-            _dockerImage   <- d .: "image"
-            _dockerVolumes <- d .: "volumes"
+        parseDocker (Object o) = do
+            docker         <- o .: "docker"
+            _dockerImage   <- docker .: "image"
+            _dockerVolumes <- docker .: "volumes"
             return DockerConf {..}
 
 instance FromJSON CommandSpec where
