@@ -1,0 +1,31 @@
+global:
+    mesosMaster:     "127.0.0.1:5050"
+
+framework:
+    user:            root
+    failoverTimeout: 1.0
+    checkpoint:      false
+    role:            "*"
+    hostname:        localhost
+    principal:       authuser
+
+tasks:
+    - name:          test
+      resources:
+          cpus:      1.0
+          memory:    [[16,32]]
+      command:
+          run:  ps -ef # or [ps, -ef]
+          uris:  []
+          env:   {}
+          user:  test
+          executor: # if defined than 'cmd' must be an executor
+              name: example
+              resources: {}
+          container: # if defined than 'cmd' runs in a container
+              docker:
+                  volumes:
+                      - hostPath: /foo
+                        containerPath: /bar
+                        readOnly: true
+                  image: busybox
