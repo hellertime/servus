@@ -5,6 +5,7 @@ module Servus.Config where
 
 import           Control.Applicative
 import           Control.Monad               (sequence)
+import           Data.Aeson                  (fromJSON)
 import qualified Data.HashMap.Lazy    as HML (lookup, toList, keys, elems)
 import           Data.Maybe                  (listToMaybe)
 import qualified Data.Text            as T   (unpack)
@@ -166,12 +167,18 @@ instance FromJSON EnvVars where
         return $ EnvVars (zip k v)
 
 instance FromJSON URI where
-    parseJSON (String s) = return $ URI (T.unpack s) Nothing Nothing
-    parseJSON (Object o) = do
-        _uriValue   <- o .: "uri"
-        _uriSetExec <- o .:? "executable"
-        _uriExtract <- o .:? "extract"
-        return URI {..}
+    parseJSON o = parseURI o <|> parseURISimple o
+      where
+        parseURISimple s@(String _) = do
+            _uriValue <- parseJSON s
+            return URI { _uriSetExec = Nothing
+                       , _uriExtract = Nothing
+                       , ..}
+        parseURI (Object o) = do
+            _uriValue   <- o .: "uri"
+            _uriSetExec <- o .:? "executable"
+            _uriExtract <- o .:? "extract"
+            return URI {..}
 
 instance FromJSON URIList where
     parseJSON (Array a) = URIList <$> mapM parseJSON (V.toList a)
