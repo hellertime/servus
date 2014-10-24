@@ -6,8 +6,8 @@ module Servus.Config where
 import           Control.Applicative
 import           Control.Monad               (sequence)
 import           Data.Aeson                  (fromJSON)
-import qualified Data.HashMap.Lazy    as HML (lookup, toList, keys, elems)
-import           Data.Maybe                  (listToMaybe)
+import qualified Data.HashMap.Lazy    as HML (lookup, toList, keys, elems, member)
+import           Data.Maybe                  (listToMaybe, fromMaybe)
 import qualified Data.Text            as T   (unpack)
 import qualified Data.Vector          as V   (toList, head, tail)
 import           Data.Yaml
@@ -103,10 +103,21 @@ data CommandConf = CommandConf
     }
   deriving (Show)
 
+data TriggerConf = TriggerConf
+    { _tcRemote       :: Bool
+    , _tcMaxInstances :: Integer
+    , _tcLaunchRate   :: Double
+    , _tcScheduleExpr :: Maybe String
+    }
+  deriving (Show)
+
+defaultTrigger = TriggerConf True 1 1.0 Nothing
+
 data TaskConf = TaskConf
-    { _tcName      :: String
-    , _tcCommand   :: CommandConf
-    , _tcResources :: Maybe ResourceList
+    { _tcName          :: String
+    , _tcCommand       :: CommandConf
+    , _tcTrigger       :: TriggerConf
+    , _tcResources     :: Maybe ResourceList
     }
   deriving (Show)
 
@@ -131,12 +142,22 @@ instance FromJSON FrameworkConf where
         return FrameworkConf { _fcName = "servus"
                              , .. }
 
+instance FromJSON TriggerConf where
+    parseJSON (Object o) = do
+        _tcRemote       <- o .:? "remote" .!= (if HML.member "schedule" o then False else True)
+        _tcMaxInstances <- o .:? "maxInstances" .!= 1
+        _tcLaunchRate   <- o .:? "launchRate" .!= 1.0
+        _tcScheduleExpr <- o .:? "schedule"
+        return TriggerConf {..}
+
 instance FromJSON TaskConf where
     parseJSON (Object o) = do
         _tcName      <- o .: "name"
         _tcCommand   <- o .: "command"
         _tcResources <- o .:? "resources"
-        return TaskConf {..}
+        maybeTrigger <- o .:? "trigger"
+        return TaskConf { _tcTrigger = fromMaybe defaultTrigger maybeTrigger
+                        , ..}
 
 instance FromJSON ExecutorConf where
     parseJSON (Object o) = do

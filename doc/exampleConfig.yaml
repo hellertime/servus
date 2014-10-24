@@ -29,3 +29,8 @@ tasks:
                         containerPath: /bar
                         readOnly: true
                   image: busybox
+      trigger:
+          remote: yes
+          maxInstances: 1
+          launchRate: 1.0
+          schedule: "every day at 12:30 +/- 5 minutes"
