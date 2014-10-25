@@ -113,8 +113,13 @@ data TriggerConf = TriggerConf
 
 defaultTrigger = TriggerConf True 1 1.0 Nothing
 
+type TaskName = String
+data TaskOwner = SystemTask | UserTask String
+  deriving (Show, Eq, Ord)
+
 data TaskConf = TaskConf
-    { _tcName          :: String
+    { _tcName          :: TaskName
+    , _tcOwner         :: TaskOwner
     , _tcCommand       :: CommandConf
     , _tcTrigger       :: TriggerConf
     , _tcResources     :: Maybe ResourceList
@@ -150,13 +155,18 @@ instance FromJSON TriggerConf where
         _tcScheduleExpr <- o .:? "schedule"
         return TriggerConf {..}
 
+instance FromJSON TaskOwner where
+    parseJSON (String s) = return $ UserTask (T.unpack s)
+
 instance FromJSON TaskConf where
     parseJSON (Object o) = do
         _tcName      <- o .: "name"
+        maybeOwner   <- o .:? "owner"
         _tcCommand   <- o .: "command"
         _tcResources <- o .:? "resources"
         maybeTrigger <- o .:? "trigger"
         return TaskConf { _tcTrigger = fromMaybe defaultTrigger maybeTrigger
+                        , _tcOwner   = fromMaybe SystemTask maybeOwner
                         , ..}
 
 instance FromJSON ExecutorConf where
