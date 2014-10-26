@@ -1,15 +1,17 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
 
 module Main where
 
 import           Control.Applicative
 import           Control.Lens
 import           Control.Monad
+import           Control.Monad.Reader
 import           Control.Monad.STM
 import           Control.Monad.Loops.STM
 import           Control.Concurrent
-import           Control.Concurrent.STM.TMVar
+import           Control.Concurrent.STM
 import qualified Data.ByteString.Char8        as C
 import           Data.List
 import qualified Data.Map.Strict              as M
@@ -22,9 +24,13 @@ import           System.Exit
 import           System.Mesos.Resources
 import           System.Mesos.Scheduler
 import           System.Mesos.Types
+import           Web.Scotty.Trans                    (scottyT)
 
 import           Servus.Config
+import           Servus.Http
 import           Servus.Options
+import           Servus.Server
+import           Servus.Task
 
 main :: IO ()
 main = execParser opts >>= go
@@ -32,9 +38,21 @@ main = execParser opts >>= go
     opts = info (helper <*> globalOptsParser) desc
     desc = fullDesc <> progDesc "d1" <> header "h1"
     go (GlobalOpts c) = do
-        conf <- parseServusConf c
-        print conf
+        (Just conf) <- parseServusConf c
+        _library  <- newTVarIO $ newTaskLibrary conf
+        _nursery  <- newTChanIO
+        _bullpen  <- newTVarIO $ newTaskBullpen
+        _arena    <- newTVarIO $ newTaskArena
+        _mortuary <- newTChanIO
+        restApiLoop $ ServerState {..}
 
+restApiLoop :: ServerState -> IO ()
+restApiLoop server = do
+    let runM m = runReaderT (runTaskM m) server
+        runActionToIO = runM
+
+    scottyT 3000 runM runActionToIO restApi
+    return ()
     {--
 
 -- | Create a skeleton task with some fields populated
