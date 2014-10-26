@@ -66,6 +66,8 @@ newtype TaskHistory = TaskHistory { fromTaskHistory :: TaskRecord TerminatedTask
 -- ordering a best-fit search is done to match an offer to a task.
 newtype TaskBullpen = TaskBullpen { fromTaskBullpen :: S.Set (TaskRecord ReadyTask) }
 
+newTaskBullpen = TaskBullpen $ S.empty
+
 -- | Schedule a task into the bullpen. The task will trigger asap.
 scheduleTaskNow :: TaskConf -> TaskBullpen -> TaskBullpen
 scheduleTaskNow task (TaskBullpen bull) = TaskBullpen $ S.insert (go task) bull
@@ -86,6 +88,8 @@ instance Ord TaskID where
 -- are now in various phases of launch. Each 'Task' will remain in the arena until it 
 -- transitions to a terminal state. At which point it will be history.
 newtype TaskArena = TaskArena { fromTaskArena :: M.Map TaskID (TaskRecord RunningTask) }
+
+newTaskArena = TaskArena $ M.empty
 
 -- | Run a 'ReadyTask' by converting it to a 'RunningTask' and associating it with a
 -- mesos 'TaskInfo', stored in the 'TaskArena' and indexed by a 'TaskID', which is
