@@ -8,12 +8,11 @@ import           Control.Monad               (sequence)
 import           Data.Aeson                  (fromJSON)
 import qualified Data.HashMap.Lazy    as HML (lookup, toList, keys, elems, member)
 import           Data.Maybe                  (listToMaybe, fromMaybe)
-import qualified Data.Text            as T   (unpack)
+import qualified Data.Text            as T   (Text)
+import           Data.Vector                 (Vector)
 import qualified Data.Vector          as V   (toList, head, tail)
 import           Data.Yaml
 import qualified System.Mesos.Types   as M
-
-import Data.Vector (Vector)
 
 parseServusConf :: FilePath -> IO (Maybe ServusConf)
 parseServusConf = decodeFile
@@ -23,85 +22,85 @@ data ServusConf = ServusConf
     , _scFramework :: Maybe FrameworkConf
     , _scTasks     :: [TaskConf]
     }
-  deriving (Show)
+  deriving (Show, Eq, Ord)
 
 data GlobalConf = GlobalConf
     { _gcMaster :: String
     }
-  deriving (Show)
+  deriving (Show, Eq, Ord)
 
 data FrameworkConf = FrameworkConf
-    { _fcName            :: String
-    , _fcUser            :: String
+    { _fcName            :: T.Text
+    , _fcUser            :: T.Text
     , _fcFailoverTimeout :: Maybe Double
     , _fcCheckpoint      :: Maybe Bool
     , _fcRole            :: Maybe String
     , _fcHostname        :: Maybe String
     , _fcPrincipal       :: Maybe String
     }
-  deriving (Show)
+  deriving (Show, Eq, Ord)
 
 data Resource = Scalar Double
               | Ranges [(Integer, Integer)]
-              | Set [String]
-              | Text String
-              deriving (Show)
+              | Set [T.Text]
+              | Text T.Text
+              deriving (Show, Eq, Ord)
 
 data ResourceList = ResourceList
-    { _rsrcs :: [(String, Resource)]
+    { _rsrcs :: [(T.Text, Resource)]
     }
-  deriving (Show)
+  deriving (Show, Eq, Ord)
 
 data EnvVars = EnvVars
-    { _evs :: [(String, String)]
+    { _evs :: [(T.Text, T.Text)]
     }
-  deriving (Show)
+  deriving (Show, Eq, Ord)
 
 data URI = URI
-    { _uriValue   :: String
+    { _uriValue   :: T.Text
     , _uriSetExec :: Maybe Bool
     , _uriExtract :: Maybe Bool
     }
-  deriving (Show)
+  deriving (Show, Eq, Ord)
 
 data URIList = URIList [URI]
-  deriving (Show)
+  deriving (Show, Eq, Ord)
 
 data ExecutorConf = ExecutorConf
-    { _execName      :: String
+    { _execName      :: T.Text
     , _execResources :: Maybe ResourceList
     }
-  deriving (Show)
+  deriving (Show, Eq, Ord)
 
 data Volume = Volume
-    { _volHostPath      :: Maybe String
-    , _volContainerPath :: String
+    { _volHostPath      :: Maybe T.Text
+    , _volContainerPath :: T.Text
     , _volReadOnly      :: Bool
     }
-  deriving (Show)
+  deriving (Show, Eq, Ord)
 
 data VolumeList = VolumeList [Volume]
-  deriving (Show)
+  deriving (Show, Eq, Ord)
 
 data ContainerConf = DockerConf
-    { _dockerImage   :: String
+    { _dockerImage   :: T.Text
     , _dockerVolumes :: VolumeList
     }
-  deriving (Show)
+  deriving (Show, Eq, Ord)
 
-data CommandSpec = ShellCommand String
-                 | ExecCommand String [String]
-                 deriving (Show)
+data CommandSpec = ShellCommand T.Text
+                 | ExecCommand T.Text [T.Text]
+                 deriving (Show, Eq, Ord)
 
 data CommandConf = CommandConf
     { _ccRun       :: CommandSpec
     , _ccURIs      :: Maybe URIList
     , _ccEnv       :: Maybe EnvVars
-    , _ccUser      :: Maybe String
+    , _ccUser      :: Maybe T.Text
     , _ccExecutor  :: Maybe ExecutorConf
     , _ccContainer :: Maybe ContainerConf
     }
-  deriving (Show)
+  deriving (Show, Eq, Ord)
 
 data TriggerConf = TriggerConf
     { _tcRemote       :: Bool
@@ -109,12 +108,12 @@ data TriggerConf = TriggerConf
     , _tcLaunchRate   :: Double
     , _tcScheduleExpr :: Maybe String
     }
-  deriving (Show)
+  deriving (Show, Eq, Ord)
 
 defaultTrigger = TriggerConf True 1 1.0 Nothing
 
-type TaskName = String
-data TaskOwner = SystemTask | UserTask String
+type TaskName = T.Text
+data TaskOwner = SystemTask | UserTask T.Text
   deriving (Show, Eq, Ord)
 
 data TaskConf = TaskConf
@@ -124,7 +123,7 @@ data TaskConf = TaskConf
     , _tcTrigger       :: TriggerConf
     , _tcResources     :: Maybe ResourceList
     }
-  deriving (Show)
+  deriving (Show, Eq, Ord)
 
 instance FromJSON ServusConf where
     parseJSON (Object o) = do
@@ -156,7 +155,7 @@ instance FromJSON TriggerConf where
         return TriggerConf {..}
 
 instance FromJSON TaskOwner where
-    parseJSON (String s) = return $ UserTask (T.unpack s)
+    parseJSON (String s) = return $ UserTask s
 
 instance FromJSON TaskConf where
     parseJSON (Object o) = do
@@ -187,13 +186,13 @@ instance FromJSON Resource where
 
 instance FromJSON ResourceList where
     parseJSON (Object o) = do 
-        k <- return $ map T.unpack $ HML.keys o
+        k <- return $ HML.keys o
         v <- mapM parseJSON $ HML.elems o
         return $ ResourceList (zip k v)
 
 instance FromJSON EnvVars where
     parseJSON (Object o) = do
-        k <- return $ map T.unpack $ HML.keys o
+        k <- return $ HML.keys o
         v <- mapM parseJSON $ HML.elems o
         return $ EnvVars (zip k v)
 
@@ -234,10 +233,10 @@ instance FromJSON ContainerConf where
             return DockerConf {..}
 
 instance FromJSON CommandSpec where
-    parseJSON (String s) = return $ ShellCommand $ T.unpack s
+    parseJSON (String s) = return $ ShellCommand s
     parseJSON (Array a)  = parseExec (V.head a) (V.tail a)
       where
-        parseExec (String x) xs = ExecCommand (T.unpack x) <$> mapM parseJSON (V.toList xs)
+        parseExec (String x) xs = ExecCommand x <$> mapM parseJSON (V.toList xs)
 
 instance FromJSON CommandConf where
     parseJSON (Object o) = do
