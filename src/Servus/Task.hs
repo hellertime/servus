@@ -3,6 +3,7 @@ module Servus.Task where
 import qualified Data.Map.Strict    as M
 import           Data.RangeSpace
 import qualified Data.Set           as S
+import           Data.Time
 import           System.Mesos.Types
 
 import Servus.Config
@@ -26,7 +27,7 @@ taskKey t = (name, owner)
 
 -- | Create a 'TaskLibrary' by extracting the 'TaskConf' from the 'ServusConf'
 newTaskLibrary :: ServusConf -> TaskLibrary
-newTaskLibrary = TaskLibrary . M.fromList . map (\t -> (taskKey t, t))
+newTaskLibrary = TaskLibrary . M.fromList . map (\t -> (taskKey t, t)) . _scTasks
 
 -- | A 'Task' contains the configuration of a task, and a mesos 'TaskInfo'
 -- when the task has been launched. Users do not obtain a 'Task' directly
@@ -38,11 +39,17 @@ data Task = Task
     { _taskConf :: TaskConf       -- ^ 'TaskConf' defines the task
     , _taskInfo :: Maybe TaskInfo -- ^ 'TaskInfo' is a mesos handle to a running task
     }
-  deriving (Show)
+  deriving (Show, Eq)
+
+instance Ord Task where
+    compare x y = compare (_taskConf x) (_taskConf y)
 
 newtype ReadyTask = ReadyTask { fromReadyTask :: Task }
+  deriving (Show, Eq, Ord)
 newtype RunningTask  = RunningTask  { fromRunningTask :: Task }
+  deriving (Show, Eq, Ord)
 newtype TerminatedTask = TerminatedTask { fromTerminatedTask :: Task }
+  deriving (Show, Eq, Ord)
 
 -- | Internal type which is used to track the progress of a task
 data TaskRecord a = TaskRecord
@@ -61,16 +68,19 @@ newtype TaskBullpen = TaskBullpen { fromTaskBullpen :: S.Set (TaskRecord ReadyTa
 
 -- | Schedule a task into the bullpen. The task will trigger asap.
 scheduleTaskNow :: TaskConf -> TaskBullpen -> TaskBullpen
-scheduleTaskNow task bull = TaskBullpen $ S.insert (go task) bull
+scheduleTaskNow task (TaskBullpen bull) = TaskBullpen $ S.insert (go task) bull
   where
-    go task = TaskRecord Nothing $ ReadyTask t Nothing
+    go task = TaskRecord Nothing $ ReadyTask $ Task task Nothing
 
 -- | Schedule as task into the bullpen. The task will only accept offers while its time
 -- bounds are valid. Otherwise it will be evicted and become terminal.
 scheduleTask :: TaskConf -> UTCTime -> TaskBullpen -> TaskBullpen
-scheduleTask task time bull = TaskBullpen $ S.insert (go task time) bull
+scheduleTask task time (TaskBullpen bull) = TaskBullpen $ S.insert (go task time) bull
   where
-    go task time = TaskRecord (Just (time, time)) $ ReadyTask task Nothing
+    go task time = TaskRecord (Just (time, time)) $ ReadyTask $ Task task Nothing
+
+instance Ord TaskID where
+    compare (TaskID x) (TaskID y) = compare x y
 
 -- | The 'TaskArena' is a collection of 'Task' which have obtained offers from mesos, and
 -- are now in various phases of launch. Each 'Task' will remain in the arena until it 
@@ -81,9 +91,8 @@ newtype TaskArena = TaskArena { fromTaskArena :: M.Map TaskID (TaskRecord Runnin
 -- mesos 'TaskInfo', stored in the 'TaskArena' and indexed by a 'TaskID', which is
 -- implicit in the 'TaskInfo'
 runTask :: TaskRecord ReadyTask -> TaskInfo -> TaskArena -> TaskArena
-runTask record info arena = TaskArena $ M.insert (taskID info) record' arena
+runTask record info (TaskArena arena) = TaskArena $ M.insert (taskID info) record' arena
   where
-    ready = _trTask record
-    task' = fromReadyTask ready { _taskInfo = info }
-    running = RunningTask task'
+    (ReadyTask ready) = _trTask record
+    running = RunningTask $ ready { _taskInfo = Just info }
     record' = record { _trTask = running }

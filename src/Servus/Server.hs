@@ -2,9 +2,11 @@
 
 module Servus.Server where
 
+import Control.Applicative
 import Control.Concurrent.STM
 import Control.Monad.Reader
 
+import Servus.Config
 import Servus.Task
 
 data ServerState = ServerState
@@ -16,7 +18,7 @@ data ServerState = ServerState
     }
 
 newtype TaskM a = TaskM { runTaskM :: ReaderT ServerState IO a }
-  deriving (Monad, MonadIO, MonadReader ServerState)
+  deriving (Applicative, Functor, Monad, MonadIO, MonadReader ServerState)
 
 taskM :: MonadTrans t => TaskM a -> t TaskM a
 taskM = lift
