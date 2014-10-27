@@ -1,7 +1,11 @@
 global:
     mesosMaster:     "127.0.0.1:5050"
 
-framework:
+http:
+    port:            8080
+
+mesos:
+    master:          "127.0.0.1:5050"
     user:            root
     failoverTimeout: 1.0
     checkpoint:      false
