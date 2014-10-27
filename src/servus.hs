@@ -22,13 +22,10 @@ import           Debug.Trace
 import           Options.Applicative
 import           System.Exit
 import qualified System.IO.Unsafe             as IOU
-import           System.Mesos.Resources
-import           System.Mesos.Scheduler
-import           System.Mesos.Types
-import           Web.Scotty.Trans                    (scottyT)
 
 import           Servus.Config
 import           Servus.Http
+import           Servus.Mesos
 import           Servus.Options
 import           Servus.Server
 import           Servus.Task
@@ -56,17 +53,10 @@ main = execParser opts >>= _main
 
         let _state   = ServerState {..}
 
+        forkThread _threads $ mesosFrameworkLoop _state
         forkThread _threads $ restApiLoop _state
 
         waitFor _threads
-
-restApiLoop :: ServerState -> IO ()
-restApiLoop server = do
-    let runM m = runReaderT (runTaskM m) server
-        runActionToIO = runM
-
-    scottyT (_hcPort $ _scHttp $ _conf server) runM runActionToIO restApi
-    return ()
 
 waitFor :: Threads -> IO ()
 waitFor threads = do

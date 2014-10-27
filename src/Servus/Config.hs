@@ -34,13 +34,13 @@ defaultServusConf = ServusConf {..}
     _scTasks  = []
 
 data GlobalConf = GlobalConf
-    { _gcMaster :: String
+    { _gcCluster :: Bool
     }
   deriving (Show, Eq, Ord)
 
 defaultGlobalConf = GlobalConf {..}
   where
-    _gcMaster = "127.0.0.1:5050"
+    _gcCluster = False
 
 type Port = Int
 
@@ -61,7 +61,7 @@ data MesosConf = MesosConf
     , _mcCheckpoint      :: Maybe Bool
     , _mcRole            :: Maybe String
     , _mcHostname        :: Maybe String
-    , _mcPrincipal       :: Maybe String
+    , _mcPrincipal       :: Maybe T.Text
     }
   deriving (Show, Eq, Ord)
 
@@ -170,7 +170,7 @@ instance FromJSON ServusConf where
         return ServusConf {..}
 
 instance FromJSON GlobalConf where
-    parseJSON (Object o) = GlobalConf <$> o .:? "mesosMaster" .!= "127.0.0.1:5050"
+    parseJSON (Object o) = GlobalConf <$> o .:? "cluster" .!= False
 
 instance FromJSON HttpConf where
     parseJSON (Object o) = HttpConf <$> o .:? "port" .!= 8080

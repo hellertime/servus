@@ -36,3 +36,13 @@ restApi = do
     get "/" $ do
        library <- taskM $ ask >>= liftIO . atomically . readTVar . _library
        WST.json $ HalTaskLibrary library
+
+restApiLoop :: ServerState -> IO ()
+restApiLoop server = do
+    let runM m = runReaderT (runTaskM m) server
+        runActionToIO = runM
+
+    scottyT (_hcPort $ _scHttp $ _conf server) runM runActionToIO restApi
+    return ()
+
+

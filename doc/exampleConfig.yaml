@@ -1,5 +1,5 @@
 global:
-    mesosMaster:     "127.0.0.1:5050"
+    cluster:         false
 
 http:
     port:            8080
