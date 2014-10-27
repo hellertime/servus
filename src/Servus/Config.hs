@@ -6,6 +6,7 @@ module Servus.Config where
 import           Control.Applicative
 import           Control.Monad               (sequence)
 import           Data.Aeson                  (fromJSON)
+import           Data.Either                 (either)
 import qualified Data.HashMap.Lazy    as HML (lookup, toList, keys, elems, member)
 import           Data.Maybe                  (listToMaybe, fromMaybe)
 import qualified Data.Text            as T   (Text)
@@ -14,31 +15,66 @@ import qualified Data.Vector          as V   (toList, head, tail)
 import           Data.Yaml
 import qualified System.Mesos.Types   as M
 
-parseServusConf :: FilePath -> IO (Maybe ServusConf)
-parseServusConf = decodeFile
+parseServusConf :: FilePath -> IO (Either ParseException ServusConf)
+parseServusConf = decodeFileEither
 
 data ServusConf = ServusConf
-    { _scGlobal    :: Maybe GlobalConf
-    , _scFramework :: Maybe FrameworkConf
-    , _scTasks     :: [TaskConf]
+    { _scGlobal :: GlobalConf
+    , _scHttp   :: HttpConf
+    , _scMesos  :: MesosConf
+    , _scTasks  :: [TaskConf]
     }
   deriving (Show, Eq, Ord)
+
+defaultServusConf = ServusConf {..}
+  where
+    _scGlobal = defaultGlobalConf
+    _scHttp   = defaultHttpConf
+    _scMesos  = defaultMesosConf
+    _scTasks  = []
 
 data GlobalConf = GlobalConf
     { _gcMaster :: String
     }
   deriving (Show, Eq, Ord)
 
-data FrameworkConf = FrameworkConf
-    { _fcName            :: T.Text
-    , _fcUser            :: T.Text
-    , _fcFailoverTimeout :: Maybe Double
-    , _fcCheckpoint      :: Maybe Bool
-    , _fcRole            :: Maybe String
-    , _fcHostname        :: Maybe String
-    , _fcPrincipal       :: Maybe String
+defaultGlobalConf = GlobalConf {..}
+  where
+    _gcMaster = "127.0.0.1:5050"
+
+type Port = Int
+
+data HttpConf = HttpConf
+    { _hcPort :: Port
     }
   deriving (Show, Eq, Ord)
+
+defaultHttpConf = HttpConf {..}
+  where
+    _hcPort = 8080
+
+data MesosConf = MesosConf
+    { _mcMaster          :: T.Text
+    , _mcName            :: T.Text
+    , _mcUser            :: T.Text
+    , _mcFailoverTimeout :: Maybe Double
+    , _mcCheckpoint      :: Maybe Bool
+    , _mcRole            :: Maybe String
+    , _mcHostname        :: Maybe String
+    , _mcPrincipal       :: Maybe String
+    }
+  deriving (Show, Eq, Ord)
+
+defaultMesosConf = MesosConf {..}
+  where
+    _mcMaster          = "127.0.0.1:5050"
+    _mcName            = "servus"
+    _mcUser            = ""
+    _mcFailoverTimeout = Nothing
+    _mcCheckpoint      = Nothing
+    _mcRole            = Nothing
+    _mcHostname        = Nothing
+    _mcPrincipal       = Nothing
 
 data Resource = Scalar Double
               | Ranges [(Integer, Integer)]
@@ -127,24 +163,29 @@ data TaskConf = TaskConf
 
 instance FromJSON ServusConf where
     parseJSON (Object o) = do
-        _scGlobal    <- o .:? "global"
-        _scFramework <- o .:? "framework"
-        _scTasks     <- o .: "tasks"
+        _scGlobal <- o .:? "global" .!= defaultGlobalConf
+        _scMesos  <- o .:? "mesos"  .!= defaultMesosConf
+        _scHttp   <- o .:? "http"   .!= defaultHttpConf
+        _scTasks  <- o .:  "tasks"
         return ServusConf {..}
 
 instance FromJSON GlobalConf where
     parseJSON (Object o) = GlobalConf <$> o .:? "mesosMaster" .!= "127.0.0.1:5050"
 
-instance FromJSON FrameworkConf where
+instance FromJSON HttpConf where
+    parseJSON (Object o) = HttpConf <$> o .:? "port" .!= 8080
+
+instance FromJSON MesosConf where
     parseJSON (Object o) = do
-        _fcUser            <- o .:? "user" .!= ""
-        _fcFailoverTimeout <- o .:? "failoverTimeout"
-        _fcCheckpoint      <- o .:? "checkpoint"
-        _fcRole            <- o .:? "role"
-        _fcHostname        <- o .:? "hostname"
-        _fcPrincipal       <- o .:? "principal"
-        return FrameworkConf { _fcName = "servus"
-                             , .. }
+        _mcMaster          <- o .:? "master" .!= "127.0.0.1:5050"
+        _mcUser            <- o .:? "user" .!= ""
+        _mcFailoverTimeout <- o .:? "failoverTimeout"
+        _mcCheckpoint      <- o .:? "checkpoint"
+        _mcRole            <- o .:? "role"
+        _mcHostname        <- o .:? "hostname"
+        _mcPrincipal       <- o .:? "principal"
+        return MesosConf { _mcName = "servus"
+                         , .. }
 
 instance FromJSON TriggerConf where
     parseJSON (Object o) = do

@@ -33,6 +33,8 @@ import           Servus.Options
 import           Servus.Server
 import           Servus.Task
 
+type Threads = MVar [MVar ()]
+
 _threads :: Threads
 _threads = IOU.unsafePerformIO $ newMVar []
 
@@ -41,10 +43,12 @@ main = execParser opts >>= _main
   where
     opts = info (helper <*> globalOptsParser) desc
     desc = fullDesc <> progDesc "d1" <> header "h1"
+    def exc = do
+        print exc
+        return defaultServusConf
     _main (GlobalOpts c) = do
-        (Just conf) <- parseServusConf c
-
-        _library  <- newTVarIO $ newTaskLibrary conf
+        _conf     <- either (def) (return) =<< parseServusConf c
+        _library  <- newTVarIO $ newTaskLibrary _conf
         _nursery  <- newTChanIO
         _bullpen  <- newTVarIO $ newTaskBullpen
         _arena    <- newTVarIO $ newTaskArena
@@ -61,10 +65,8 @@ restApiLoop server = do
     let runM m = runReaderT (runTaskM m) server
         runActionToIO = runM
 
-    scottyT 3000 runM runActionToIO restApi
+    scottyT (_hcPort $ _scHttp $ _conf server) runM runActionToIO restApi
     return ()
-
-type Threads = MVar [MVar ()]
 
 waitFor :: Threads -> IO ()
 waitFor threads = do

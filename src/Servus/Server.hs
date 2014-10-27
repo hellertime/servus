@@ -10,7 +10,8 @@ import Servus.Config
 import Servus.Task
 
 data ServerState = ServerState
-    { _library  :: TVar TaskLibrary   -- ^ Task library is updated via REST API and during config
+    { _conf     :: ServusConf         -- ^ Parsed server configuration
+    , _library  :: TVar TaskLibrary   -- ^ Task library is updated via REST API and during config
     , _nursery  :: TChan TaskConf     -- ^ The task nursery holds new task instances which were triggered remotely
     , _bullpen  :: TVar TaskBullpen   -- ^ Task bullpen holds instances awaiting offers from mesos
     , _arena    :: TVar TaskArena     -- ^ Task arean holds launched instances
