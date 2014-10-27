@@ -9,7 +9,7 @@ import           Control.Lens
 import           Control.Monad
 import           Control.Monad.Reader
 import           Control.Monad.STM
-import           Control.Monad.Loops.STM
+-- import           Control.Monad.Loops.STM
 import           Control.Concurrent
 import           Control.Concurrent.STM
 import qualified Data.ByteString.Char8        as C
@@ -21,6 +21,7 @@ import           Data.Tuple (swap)
 import           Debug.Trace
 import           Options.Applicative
 import           System.Exit
+import qualified System.IO.Unsafe             as IOU
 import           System.Mesos.Resources
 import           System.Mesos.Scheduler
 import           System.Mesos.Types
@@ -32,19 +33,28 @@ import           Servus.Options
 import           Servus.Server
 import           Servus.Task
 
+_threads :: Threads
+_threads = IOU.unsafePerformIO $ newMVar []
+
 main :: IO ()
-main = execParser opts >>= go
+main = execParser opts >>= _main
   where
     opts = info (helper <*> globalOptsParser) desc
     desc = fullDesc <> progDesc "d1" <> header "h1"
-    go (GlobalOpts c) = do
+    _main (GlobalOpts c) = do
         (Just conf) <- parseServusConf c
+
         _library  <- newTVarIO $ newTaskLibrary conf
         _nursery  <- newTChanIO
         _bullpen  <- newTVarIO $ newTaskBullpen
         _arena    <- newTVarIO $ newTaskArena
         _mortuary <- newTChanIO
-        restApiLoop $ ServerState {..}
+
+        let _state   = ServerState {..}
+
+        forkThread _threads $ restApiLoop _state
+
+        waitFor _threads
 
 restApiLoop :: ServerState -> IO ()
 restApiLoop server = do
@@ -53,6 +63,26 @@ restApiLoop server = do
 
     scottyT 3000 runM runActionToIO restApi
     return ()
+
+type Threads = MVar [MVar ()]
+
+waitFor :: Threads -> IO ()
+waitFor threads = do
+    ts <- takeMVar threads
+    case ts of
+        []     -> return ()
+        (m:ms) -> do
+            putMVar threads ms
+            takeMVar m
+            waitFor threads
+
+forkThread :: Threads -> IO () -> IO ThreadId
+forkThread threads io = do
+    t  <- newEmptyMVar
+    ts <- takeMVar threads
+    putMVar threads (t:ts)
+    forkFinally io (\_ -> putMVar t ())
+
     {--
 
 -- | Create a skeleton task with some fields populated
