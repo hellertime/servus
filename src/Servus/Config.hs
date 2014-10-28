@@ -4,7 +4,7 @@
 module Servus.Config where
 
 import           Control.Applicative
-import           Control.Monad               (sequence)
+import           Control.Monad.Writer
 import           Data.Aeson                  (fromJSON)
 import           Data.Either                 (either)
 import qualified Data.HashMap.Lazy    as HML (lookup, toList, keys, elems, member)
@@ -92,14 +92,14 @@ data EnvVars = EnvVars
     }
   deriving (Show, Eq, Ord)
 
-data URI = URI
+data Uri = Uri
     { _uriValue   :: T.Text
     , _uriSetExec :: Maybe Bool
     , _uriExtract :: Maybe Bool
     }
   deriving (Show, Eq, Ord)
 
-data URIList = URIList [URI]
+data UriList = UriList [Uri]
   deriving (Show, Eq, Ord)
 
 data ExecutorConf = ExecutorConf
@@ -130,7 +130,7 @@ data CommandSpec = ShellCommand T.Text
 
 data CommandConf = CommandConf
     { _ccRun       :: CommandSpec
-    , _ccURIs      :: Maybe URIList
+    , _ccUris      :: Maybe UriList
     , _ccEnv       :: Maybe EnvVars
     , _ccUser      :: Maybe T.Text
     , _ccExecutor  :: Maybe ExecutorConf
@@ -149,12 +149,9 @@ data TriggerConf = TriggerConf
 defaultTrigger = TriggerConf True 1 1.0 Nothing
 
 type TaskName = T.Text
-data TaskOwner = SystemTask | UserTask T.Text
-  deriving (Show, Eq, Ord)
 
 data TaskConf = TaskConf
     { _tcName          :: TaskName
-    , _tcOwner         :: TaskOwner
     , _tcCommand       :: CommandConf
     , _tcTrigger       :: TriggerConf
     , _tcResources     :: Maybe ResourceList
@@ -195,25 +192,42 @@ instance FromJSON TriggerConf where
         _tcScheduleExpr <- o .:? "schedule"
         return TriggerConf {..}
 
-instance FromJSON TaskOwner where
-    parseJSON (String s) = return $ UserTask s
+instance ToJSON TriggerConf where
+    toJSON TriggerConf {..} = object . execWriter $
+        do tell [ "remote"       .= _tcRemote
+                , "maxInstances" .= _tcMaxInstances
+                , "launchRate"   .= _tcLaunchRate
+                , "schedule"     .= _tcScheduleExpr
+                ]
 
 instance FromJSON TaskConf where
     parseJSON (Object o) = do
         _tcName      <- o .: "name"
-        maybeOwner   <- o .:? "owner"
         _tcCommand   <- o .: "command"
         _tcResources <- o .:? "resources"
         maybeTrigger <- o .:? "trigger"
         return TaskConf { _tcTrigger = fromMaybe defaultTrigger maybeTrigger
-                        , _tcOwner   = fromMaybe SystemTask maybeOwner
                         , ..}
+
+instance ToJSON TaskConf where
+    toJSON TaskConf {..} = object . execWriter $
+        do tell [ "name"    .= _tcName
+                , "command" .= _tcCommand
+                , "trigger" .= _tcTrigger
+                ]
+           tell $ maybe [] ((:[]) . ("resources" .=)) _tcResources
 
 instance FromJSON ExecutorConf where
     parseJSON (Object o) = do
         _execName      <- o .: "name"
         _execResources <- o .:? "resources"
         return ExecutorConf {..}
+
+instance ToJSON ExecutorConf where
+    toJSON ExecutorConf {..} = object . execWriter $
+        do tell [ "name"      .= _execName
+                , "resources" .= _execResources
+                ]
 
 instance FromJSON Resource where
     parseJSON n@(Number _) = Scalar <$> parseJSON n
@@ -223,7 +237,12 @@ instance FromJSON Resource where
         parseArray a@(x:_) = case x of
             (Number _) -> Set <$> mapM parseJSON a
             (Array _)  -> Ranges <$> mapM parseJSON a
-            
+
+instance ToJSON Resource where
+    toJSON (Scalar n)  = toJSON n
+    toJSON (Text t)    = toJSON t
+    toJSON (Set ns)    = toJSON ns
+    toJSON (Ranges ps) = toJSON $ map (\(l,u) -> [l,u]) ps
 
 instance FromJSON ResourceList where
     parseJSON (Object o) = do 
@@ -231,28 +250,45 @@ instance FromJSON ResourceList where
         v <- mapM parseJSON $ HML.elems o
         return $ ResourceList (zip k v)
 
+instance ToJSON ResourceList where
+    toJSON (ResourceList rs) = object $ map (\(k,v) -> k .= (toJSON v)) rs
+
 instance FromJSON EnvVars where
     parseJSON (Object o) = do
         k <- return $ HML.keys o
         v <- mapM parseJSON $ HML.elems o
         return $ EnvVars (zip k v)
 
-instance FromJSON URI where
-    parseJSON o = parseURI o <|> parseURISimple o
+instance ToJSON EnvVars where
+    toJSON (EnvVars evs) = object $ map (\(k,v) -> k .= (toJSON v)) evs
+
+instance FromJSON Uri where
+    parseJSON o = parseUri o <|> parseUriSimple o
       where
-        parseURISimple s@(String _) = do
+        parseUriSimple s@(String _) = do
             _uriValue <- parseJSON s
-            return URI { _uriSetExec = Nothing
+            return Uri { _uriSetExec = Nothing
                        , _uriExtract = Nothing
                        , ..}
-        parseURI (Object o) = do
+        parseUri (Object o) = do
             _uriValue   <- o .: "uri"
             _uriSetExec <- o .:? "executable"
             _uriExtract <- o .:? "extract"
-            return URI {..}
+            return Uri {..}
 
-instance FromJSON URIList where
-    parseJSON (Array a) = URIList <$> mapM parseJSON (V.toList a)
+instance ToJSON Uri where
+    toJSON (Uri uri Nothing Nothing) = toJSON uri
+    toJSON Uri {..} = object . execWriter $
+        do tell [ "uri"        .= _uriValue
+                , "executable" .= _uriSetExec
+                , "extract"    .= _uriExtract
+                ]
+
+instance FromJSON UriList where
+    parseJSON (Array a) = UriList <$> mapM parseJSON (V.toList a)
+
+instance ToJSON UriList where
+    toJSON (UriList uris) = toJSON uris
 
 instance FromJSON Volume where
     parseJSON (Object o) = do
@@ -261,8 +297,18 @@ instance FromJSON Volume where
         _volReadOnly      <- o .:? "readOnly" .!= False
         return Volume {..}
 
+instance ToJSON Volume where
+    toJSON Volume {..} = object . execWriter $
+        do tell [ "hostPath"      .= _volHostPath
+                , "containerPath" .= _volContainerPath
+                , "readOnly"      .= _volReadOnly
+                ]
+
 instance FromJSON VolumeList where
     parseJSON (Array a) = VolumeList <$> mapM parseJSON (V.toList a)
+
+instance ToJSON VolumeList where
+    toJSON (VolumeList vs) = toJSON vs
 
 instance FromJSON ContainerConf where
     parseJSON = parseDocker
@@ -273,18 +319,40 @@ instance FromJSON ContainerConf where
             _dockerVolumes <- docker .: "volumes"
             return DockerConf {..}
 
+instance ToJSON ContainerConf where
+    toJSON DockerConf {..} = object [ "docker" .= conf ]
+      where
+        conf = object . execWriter $
+            do tell [ "image"   .= _dockerImage
+                    , "volumes" .= _dockerVolumes
+                    ]
+
 instance FromJSON CommandSpec where
     parseJSON (String s) = return $ ShellCommand s
     parseJSON (Array a)  = parseExec (V.head a) (V.tail a)
       where
         parseExec (String x) xs = ExecCommand x <$> mapM parseJSON (V.toList xs)
 
+instance ToJSON CommandSpec where
+    toJSON (ShellCommand s) = toJSON s
+    toJSON (ExecCommand cmd args) = toJSON (cmd:args)
+
 instance FromJSON CommandConf where
     parseJSON (Object o) = do
         _ccRun       <- o .: "run"
-        _ccURIs      <- o .:? "uris"
+        _ccUris      <- o .:? "uris"
         _ccEnv       <- o .:? "env"
         _ccUser      <- o .:? "user"
         _ccExecutor  <- o .:? "executor"
         _ccContainer <- o .:? "container"
         return CommandConf {..}
+
+instance ToJSON CommandConf where
+    toJSON CommandConf {..} = object . execWriter $
+        do tell [ "run"       .= _ccRun
+                , "uris"      .= _ccUris
+                , "env"       .= _ccEnv
+                , "user"      .= _ccUser
+                , "executor"  .= _ccExecutor
+                , "container" .= _ccContainer
+                ]

@@ -69,6 +69,20 @@ When a Task is to be executed, a TaskInstance is created and scheduled.
          honor the request? Or does it ignore it. (i.e. Can an executor relinquish
          resources allocated to it?)
 
+## Servus TaskLibrary
+
+The TaskLibrary is a collection of task configurations; tasks in the TaskLibrary can be 
+run either by the ClockThread on a specified schedule, or immediately via a POST to the
+tasks exposed HTTP URL (if enabled).
+
+## Servus TaskBullpen
+
+When a task is to be run, either out of the TaskLibrary via the clock or exposed trigger url,
+or if the task is to be run immediately, a task instance is added to the TaskBullpen which
+tracks tasks which are ready to run, but have not yet been matched with offers from mesos.
+
+**TODO** This is not up-to-date. And 'Servus.Task' is a more correct view of a task lifecycle.
+
 A TaskInstance begins in the SLEEP state, and is put on the SLEEP-QUEUE. There it awaits
 offers from mesos which match its constraints. When an offer match is made, Servus will
 move the task to the LAUNCHED state, and launch the task on the executor. LAUNCHED tasks
@@ -132,3 +146,163 @@ a control URL which can be used to monitor and manage the TaskInstance.
 **NOTE** The control URL is not unique to the TriggerThread, any TaskInstance will have an associated
          control URL which can be used to manage the Task remotely.
 **NOTE** Review this design when surveying HTTP server libraries to back the REST API.
+
+# Hypermedia Api
+
+The Servus Hypermedia Api provides a way to manipulate the TaskLibrary, and to trigger tasks which have
+exposed a trigger link endpoint. In addition the api allows insight into the runtime behavior of the
+server.
+
+## Base URL
+
+All URLs for the Servus api have the following base:
+
+    https://<host>:<port>/
+
+Make an `HTTP GET` request to this URL to view links to
+available subresource.
+
+#### Example
+
+> curl -i -H 'Accept: application/vnd.servus.v1+json' https://localhost:8080/
+
+```
+HTTP/1.1 200 OK
+Server: servus
+Date: ...
+Content-Type: application/json; charset=utf-8
+Connection: close
+Status: 200 OK
+ETag: ...
+X-Servus-Media-Type: servus.Subresources.v1
+Content-Length: ...
+Cache-Control: max-age=0, private, must-revalidate
+
+{ "Subresources": {
+    "Self": "https://localhost:8080/"
+,   "TaskLibrary": "https://localhost:8080/@@owner@@/tasks/"
+,   "TaskArena": "https://localhost:8080/arena/"
+,   "TaskBullpen": "https://localhost:8080/bullpen/"
+}}
+```
+
+## Subresources
+
+Servus Accounts have the following subresources.
+
+- Tasks
+
+    * Create
+
+    To create a task, make an `HTTP POST` request to the server at the advertised
+    TaskLibrary Subresource endpoint:
+
+#### Example
+
+```
+> curl -XPOST -H 'Content-Type: application/vnd.servus.Task.v1+json' -i -d@- https://localhost:8080/@@owner@@/tasks/ <<'END';
+{ "Task": {
+    "name": "example"
+,   "resources": { "cpu": 1.0, "memory": [[16,32]] }
+,   "command": {
+        "run": ["ps", "-ef"] // runs without shell, "ps -ef" would use shell
+    ,   "uris": []
+    ,   "env: {}
+    }
+,   "trigger": {
+        "maxInstances": 1
+    ,   "launchRate": 1.0
+    ,   "remote": true
+    ,   "schedule": "every monday at 12:00"
+    }
+}}
+END
+```
+
+```
+HTTP/1.1 200 OK
+Server: servus
+Date: ...
+Content-Type: application/json; charset=utf-8
+Connection: close
+Status: 200 OK
+ETag: ...
+X-Servus-Media-Type: servus.TaskCreated.v1
+Content-Length: ...
+Cache-Control: max-age=0, private, must-revalidate
+
+{ "TaskCreated": {
+,   "owner": @@owner@@
+,   "name": "example"
+,   "TaskUrl": "https://localhost:8080/@@owner@@/tasks/example/"
+}}
+```
+
+    * View state of task arena
+
+    The TaskArena is the RunningTask collection, tasks which have been matched to offer and launched.
+    To view the arean, make an HTTP GET request to the advertised TaskArena subresource endpoint:
+
+> curl -H 'Accept: application/vnd.servus.v1+json' -i https://localhost:8080/arena/
+
+HTTP/1.1 200 OK
+Server: servus
+Date: ...
+Content-Type: application/json; charset=utf-8
+Connection: close
+Status: 200 OK
+ETag: ...
+X-Servus-Media-Type: servus.TaskArena.v1
+Content-Length: ...
+Cache-Control: max-age=0, private, must-revalidate
+
+{ "TaskArena": [
+    { "TaskRecord": {
+        "Self": "https://localhost:8080/arena/@@owner@@/tasks/example/TaskRecord@1/"
+    ,   "nominalTime": ...
+    ,   "slackTime": ...
+    ,   "Task": "https://localhost:8080/@@owner@@/tasks/example/"
+    }}
+,   { "TaskRecord": ... }
+]}
+```
+
+    * View state of task bullpen
+
+    The TaskBullpen is the ReadyTask collection, tasks which have been scheduled to run either by
+    the clock thread or via a trigger. To view the bullpen, make a GET request to the advertised
+    TaskBullpen subresource endpoint:
+
+> curl -H 'Accept: application/vnd.servus.v1+json' -i https://localhost:8080/bullpen/
+
+HTTP/1.1 200 OK
+Server: servus
+Date: ...
+Content-Type: application/json; charset=utf-8
+Connection: close
+Status: 200 OK
+ETag: ...
+X-Servus-Media-Type: servus.TaskBullpen.v1
+Content-Length: ...
+Cache-Control: max-age=0, private, must-revalidate
+
+{ "TaskBullpen": [
+    { "TaskRecord": {
+        "Self": "https://localhost:8080/bullpen/@@owner@@/tasks/example/TaskRecord@1"
+        "nominalTime": ...
+        "slackTime": ...
+        "startTime": ...
+        "elapsedSeconds": ...
+        "Task": "https://localhost:8080/@@owner@@/tasks/example/"
+    }}
+,   { "TaskRecord": ... }
+]}
+```
+
+    * View task history
+    * Terminate a task
+    * Trigger a task
+
+- Usage
+
+    * View account usage data

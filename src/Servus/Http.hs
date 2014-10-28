@@ -5,7 +5,7 @@ module Servus.Http where
 import           Control.Concurrent.STM
 import           Control.Monad.Reader
 import           Data.Aeson
-import qualified Data.Map.Strict                     as M
+import qualified Data.Map.Strict                      as M
 import           Data.Monoid                                 ((<>))
 import           Data.Text.Lazy                              (Text, empty)
 import           Network.Wai.Middleware.RequestLogger
@@ -16,26 +16,76 @@ import Servus.Config
 import Servus.Server
 import Servus.Task
 
-newtype HalTaskLibrary = HalTaskLibrary TaskLibrary
+data ApiEntryPoint = ApiEntryPoint
+    { _epRun     :: Text
+    , _epTasks   :: Text
+    , _epHistory :: Text
+    }
+  deriving (Show, Eq, Ord)
 
-instance ToJSON HalTaskLibrary where
-    toJSON (HalTaskLibrary (TaskLibrary tl)) = object [ "_links" .= hal ]
+instance ToJSON ApiEntryPoint where
+    toJSON (ApiEntryPoint run tasks history) = object [ "links" .= links ]
       where
-        hal = object $ [ "self"          .= object [ "href" .= ("/" <> empty) ]
-                       , "curies"        .= curies
-                       , "x:taskLibrary" .= tasks
-                       ]
-        curies = [ object [ "name" .= ("x" <> empty), "href" .= ("xxx" <> empty), "templated" .= True ] ]
-        tasks = object $ map toLink $ M.keys tl
-        toLink (name, SystemTask)    = "href" .= ("/taskLibrary/system/" <> name)
-        toLink (name, UserTask owner) = "href" .= ("/taskLibrary/user/" <> owner <> "/" <> name)
+        links = [ (toLink run), (toLink tasks), (toLink history) ]
+        toLink l = object [ "href" .= l ]
+
+data ApiTaskList = ApiTaskList TaskLibrary
+
+instance ToJSON ApiTaskList where
+    toJSON (ApiTaskList library) = object [ "links" .= links ]
+      where
+        links = tasks library
+        tasks (TaskLibrary library) = object $ map toLink (M.keys library)
+        toLink l = "href" .= ("/tasks/" <> l) 
+
+data ApiTask = ApiTask TaskConf
+
+instance ToJSON ApiTask where
+    toJSON (ApiTask task) = toJSON task
+
+getsTVar f = taskM $ ask >>= liftIO . atomically . readTVar . f
 
 restApi :: ScottyT Text TaskM ()
 restApi = do
     middleware logStdoutDev
     get "/" $ do
-       library <- taskM $ ask >>= liftIO . atomically . readTVar . _library
-       WST.json $ HalTaskLibrary library
+       --library <- taskM $ ask >>= liftIO . atomically . readTVar . _library
+        WST.json $ ApiEntryPoint "/run" "/tasks" "/history"
+{--
+    get "/run/" $ do
+        ...
+
+    get "/run/:name/" $ do
+        ...
+
+    get "/run/:name/:taskid" $ do
+        ...
+
+    delete "/run/:name/:taskid" $ do
+        ...
+
+    post "/run/" $ do
+        ...
+
+    post "/run/:name/" $ do
+        ...
+        --}
+
+    get "/tasks/" $ do
+        library <- getsTVar _library
+        WST.json $ ApiTaskList library
+
+    get "/tasks/:name/" $ do
+        name    <- param "name"
+        library <- getsTVar _library
+        WST.json $ lookupTask library name
+{--
+    post "/tasks/" $ do
+        ...
+
+    get "/history/" $ do
+        ...
+--}
 
 restApiLoop :: ServerState -> IO ()
 restApiLoop server = do

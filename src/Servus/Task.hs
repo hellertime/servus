@@ -8,26 +8,17 @@ import           System.Mesos.Types
 
 import Servus.Config
 
--- | The 'TaskLibrary' is a collection of 'TaskConf' indexed by 'TaskKey'.
+-- | The 'TaskLibrary' is a collection of 'TaskConf' indexed by 'TaskName'
 -- On startup the server puts any tasks found in the configuration into
 -- the library. During runtime, the library can be manipulated via the
 -- REST API (@Servus.Http@).
-newtype TaskLibrary = TaskLibrary { fromTaskLibrary :: M.Map TaskKey TaskConf }
-
--- | A 'TaskKey' identifies a 'TaskConf' in a 'TaskLibrary'
--- One creates a 'TaskKey' with a call to 'taskKey'
-type TaskKey = (TaskName, TaskOwner)
-
--- | Generate the 'TaskKey' for the given 'TaskConf'
-taskKey :: TaskConf -> TaskKey
-taskKey t = (name, owner)
-  where
-    name  = _tcName t
-    owner = _tcOwner t
+newtype TaskLibrary = TaskLibrary { fromTaskLibrary :: M.Map TaskName TaskConf }
 
 -- | Create a 'TaskLibrary' by extracting the 'TaskConf' from the 'ServusConf'
 newTaskLibrary :: ServusConf -> TaskLibrary
-newTaskLibrary = TaskLibrary . M.fromList . map (\t -> (taskKey t, t)) . _scTasks
+newTaskLibrary = TaskLibrary . M.fromList . map (\t -> (_tcName t, t)) . _scTasks
+
+lookupTask (TaskLibrary l) t = M.lookup t l
 
 -- | A 'Task' contains the configuration of a task, and a mesos 'TaskInfo'
 -- when the task has been launched. Users do not obtain a 'Task' directly
