@@ -1,0 +1,7 @@
+{ "name": "postdemo"
+, "resource": { "cpus": 2.0 }
+, "command": {
+    "run": "env"
+}
+, "trigger": { "remote": true }
+}

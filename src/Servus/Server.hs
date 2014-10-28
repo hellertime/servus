@@ -25,10 +25,25 @@ newtype TaskM a = TaskM { runTaskM :: ReaderT ServerState IO a }
 taskM :: MonadTrans t => TaskM a -> t TaskM a
 taskM = lift
 
+-- | Obtain the 'TaskLibrary' from the 'ServerState'
+getTaskLibrary :: ServerState -> IO TaskLibrary
 getTaskLibrary = atomically . readTVar . _library
 
-lookupTaskConf n s = do
+-- | Get a 'TaskConf' from the 'TaskLibrary' if it exists, otherwise 'Nothing'
+getTaskConf :: TaskName -> ServerState -> IO (Maybe TaskConf)
+getTaskConf n s = do
     library <- getTaskLibrary s
     return $ go library n
   where
     go (TaskLibrary lib) name = M.lookup name lib
+
+-- | Put a 'TaskConf' into the 'TaskLibrary' if a previous version exists
+-- it will be returned by the function
+putTaskConf :: TaskConf -> ServerState -> IO (Maybe TaskConf)
+putTaskConf t s = atomically $ do
+    library <- readTVar $ _library s
+    let (old, library') = insertLookup (_tcName t) t library
+    writeTVar (_library s) (TaskLibrary library')
+    return old
+      where
+        insertLookup name conf (TaskLibrary lib) = M.insertLookupWithKey (\_ a _ -> a) name conf lib

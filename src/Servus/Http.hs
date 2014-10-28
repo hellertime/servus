@@ -8,7 +8,7 @@ import           Control.Monad.Reader
 import           Data.Aeson
 import qualified Data.Map.Strict                      as M
 import           Data.Monoid                                 ((<>))
-import           Data.Text.Lazy                              (Text, empty)
+import           Data.Text.Lazy                              (Text, empty, fromStrict)
 import           Network.HTTP.Types
 import           Network.Wai.Middleware.RequestLogger
 import           Web.Scotty.Trans
@@ -77,12 +77,15 @@ restApi = do
 
     get "/tasks/:name/" $ do
         name <- param "name"
-        (liftTask $ lookupTaskConf name) >>= \case
+        (liftTask $ getTaskConf name) >>= \case
             Nothing   -> status status404
             Just task -> WST.json task
-{--
     post "/tasks/" $ do
-        
+        conf <- jsonData
+        liftTask $ putTaskConf conf
+        setHeader "Location" ("/tasks/" <> (fromStrict $ _tcName conf) <> "/")
+        status status201
+        {--
     get "/history/" $ do
         ...
 --}
