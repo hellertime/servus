@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Servus.Http where
 
@@ -8,6 +9,7 @@ import           Data.Aeson
 import qualified Data.Map.Strict                      as M
 import           Data.Monoid                                 ((<>))
 import           Data.Text.Lazy                              (Text, empty)
+import           Network.HTTP.Types
 import           Network.Wai.Middleware.RequestLogger
 import           Web.Scotty.Trans
 import qualified Web.Scotty.Trans                     as WST
@@ -43,13 +45,12 @@ data ApiTask = ApiTask TaskConf
 instance ToJSON ApiTask where
     toJSON (ApiTask task) = toJSON task
 
-getsTVar f = taskM $ ask >>= liftIO . atomically . readTVar . f
+liftTask f = taskM $ ask >>= liftIO . f
 
 restApi :: ScottyT Text TaskM ()
 restApi = do
     middleware logStdoutDev
     get "/" $ do
-       --library <- taskM $ ask >>= liftIO . atomically . readTVar . _library
         WST.json $ ApiEntryPoint "/run" "/tasks" "/history"
 {--
     get "/run/" $ do
@@ -70,19 +71,18 @@ restApi = do
     post "/run/:name/" $ do
         ...
         --}
-
     get "/tasks/" $ do
-        library <- getsTVar _library
+        library <- liftTask getTaskLibrary
         WST.json $ ApiTaskList library
 
     get "/tasks/:name/" $ do
-        name    <- param "name"
-        library <- getsTVar _library
-        WST.json $ lookupTask library name
+        name <- param "name"
+        (liftTask $ lookupTaskConf name) >>= \case
+            Nothing   -> status status404
+            Just task -> WST.json task
 {--
     post "/tasks/" $ do
-        ...
-
+        
     get "/history/" $ do
         ...
 --}

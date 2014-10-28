@@ -18,8 +18,6 @@ newtype TaskLibrary = TaskLibrary { fromTaskLibrary :: M.Map TaskName TaskConf }
 newTaskLibrary :: ServusConf -> TaskLibrary
 newTaskLibrary = TaskLibrary . M.fromList . map (\t -> (_tcName t, t)) . _scTasks
 
-lookupTask (TaskLibrary l) t = M.lookup t l
-
 -- | A 'Task' contains the configuration of a task, and a mesos 'TaskInfo'
 -- when the task has been launched. Users do not obtain a 'Task' directly
 -- and instead will always deal with a 'Task' in a given state:

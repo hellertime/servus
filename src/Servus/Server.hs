@@ -2,9 +2,10 @@
 
 module Servus.Server where
 
-import Control.Applicative
-import Control.Concurrent.STM
-import Control.Monad.Reader
+import           Control.Applicative
+import           Control.Concurrent.STM
+import           Control.Monad.Reader
+import qualified Data.Map.Strict as M
 
 import Servus.Config
 import Servus.Task
@@ -23,3 +24,11 @@ newtype TaskM a = TaskM { runTaskM :: ReaderT ServerState IO a }
 
 taskM :: MonadTrans t => TaskM a -> t TaskM a
 taskM = lift
+
+getTaskLibrary = atomically . readTVar . _library
+
+lookupTaskConf n s = do
+    library <- getTaskLibrary s
+    return $ go library n
+  where
+    go (TaskLibrary lib) name = M.lookup name lib

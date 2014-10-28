@@ -30,4 +30,5 @@ executable servus
                         mtl >=2.1,
                         scotty >=0.9,
                         wai-extra,
-                        time
+                        time,
+                        http-types
