@@ -1,12 +1,55 @@
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
+
 module Servus.Task where
 
-import qualified Data.Map.Strict    as M
+import qualified Data.ByteString.Char8 as C8
+import qualified Data.Map.Strict       as M
 import           Data.RangeSpace
-import qualified Data.Set           as S
 import           Data.Time
 import           System.Mesos.Types
 
-import Servus.Config
+import           Servus.Config                (ServusConf (..), TaskConf (..), TaskName)
+
+-- | 'TaskSchedule' is used by the scheduler when selecting a task to run
+data TaskSchedule = TaskSchedule
+    { _tsTimeBounds :: Maybe (Bounds UTCTime)
+    }
+  deriving (Show, Eq, Ord)
+
+-- | 'Task', carries the information about a task as it progresses through
+-- its lifecycle. The phantom type tracks the state.
+data Task a = Task 
+    { _tConf  :: TaskConf
+    , _tSched :: TaskSchedule
+    , _tInfo  :: TaskInfo
+    }
+  deriving (Show, Eq)
+
+instance Ord (Task a) where
+    compare (Task x _ _) (Task y _ _) = compare x y
+
+-- | States of a 'Task'
+data Warmup
+data Ready
+data Running
+data Finished
+
+-- | Build and return a new task instance, based on a config and an id
+newTask :: TaskConf -> TaskID -> Task Warmup
+newTask conf tid = Task conf sched info
+  where
+    sched = TaskSchedule Nothing
+    info = TaskInfo { taskInfoName       = "" -- ^ must populate strict fields
+                    , taskID             = tid
+                    , taskSlaveID        = ""
+                    , taskResources      = []
+                    , taskImplementation = TaskCommand cmd
+                    , taskData           = Nothing
+                    , taskContainer      = Nothing
+                    , taskHealthCheck    = Nothing
+                    }
+    cmd = CommandInfo [] Nothing (ShellCommand "") Nothing
 
 -- | The 'TaskLibrary' is a collection of 'TaskConf' indexed by 'TaskName'
 -- On startup the server puts any tasks found in the configuration into
@@ -17,6 +60,8 @@ newtype TaskLibrary = TaskLibrary { fromTaskLibrary :: M.Map TaskName TaskConf }
 -- | Create a 'TaskLibrary' by extracting the 'TaskConf' from the 'ServusConf'
 newTaskLibrary :: ServusConf -> TaskLibrary
 newTaskLibrary = TaskLibrary . M.fromList . map (\t -> (_tcName t, t)) . _scTasks
+
+{--
 
 -- | A 'Task' contains the configuration of a task, and a mesos 'TaskInfo'
 -- when the task has been launched. Users do not obtain a 'Task' directly
@@ -33,12 +78,16 @@ data Task = Task
 instance Ord Task where
     compare x y = compare (_taskConf x) (_taskConf y)
 
-newtype ReadyTask = ReadyTask { fromReadyTask :: Task }
-  deriving (Show, Eq, Ord)
-newtype RunningTask  = RunningTask  { fromRunningTask :: Task }
-  deriving (Show, Eq, Ord)
-newtype TerminatedTask = TerminatedTask { fromTerminatedTask :: Task }
-  deriving (Show, Eq, Ord)
+newtype NewTask        = NewTask Task
+newtype ReadyTask      = ReadyTask Task
+newtype RunningTask    = RunningTask Task
+newtype TerminatedTask = TerminatedTask Task
+
+-- | Construct a 'NewTask' from a 'TaskConf' and 'TaskID'
+newTask :: TaskConf -> TaskID -> NewTask
+newTask tc tid = Task $ tc (Just $ tinfo { taskID = tid })
+  where
+    tinfo = TaskInfo {..} -- ^ default all fields to bottom
 
 -- | Internal type which is used to track the progress of a task
 data TaskRecord a = TaskRecord
@@ -46,6 +95,8 @@ data TaskRecord a = TaskRecord
     , _trTask       :: a
     }
   deriving (Show, Eq, Ord)
+
+newtype TaskNursery = TaskNursery { fromTaskNursery :: TaskRecord NewTask }
 
 -- | Final state of a task instance
 newtype TaskHistory = TaskHistory { fromTaskHistory :: TaskRecord TerminatedTask }
@@ -56,6 +107,12 @@ newtype TaskHistory = TaskHistory { fromTaskHistory :: TaskRecord TerminatedTask
 newtype TaskBullpen = TaskBullpen { fromTaskBullpen :: S.Set (TaskRecord ReadyTask) }
 
 newTaskBullpen = TaskBullpen $ S.empty
+
+-- | Create a task instance which can be sent to the nursery
+-- A 'NewTask' has a partially applied 'TaskInfo' which is
+-- valid only for 'taskID' and no other field
+newTask :: TaskConf -> TaskID -> NewTask
+newTask c t = NewTask
 
 -- | Schedule a task into the bullpen. The task will trigger asap.
 scheduleTaskNow :: TaskConf -> TaskBullpen -> TaskBullpen
@@ -89,3 +146,5 @@ runTask record info (TaskArena arena) = TaskArena $ M.insert (taskID info) recor
     (ReadyTask ready) = _trTask record
     running = RunningTask $ ready { _taskInfo = Just info }
     record' = record { _trTask = running }
+
+--}

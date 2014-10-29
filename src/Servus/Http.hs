@@ -80,6 +80,7 @@ restApi = do
         (liftTask $ getTaskConf name) >>= \case
             Nothing   -> status status404
             Just task -> WST.json task
+
     post "/tasks/" $ do
         conf <- jsonData
         liftTask $ putTaskConf conf

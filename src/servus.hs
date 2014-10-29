@@ -11,7 +11,6 @@ import           Control.Monad.Reader
 import           Control.Monad.STM
 -- import           Control.Monad.Loops.STM
 import           Control.Concurrent
-import           Control.Concurrent.STM
 import qualified Data.ByteString.Char8        as C
 import           Data.List
 import qualified Data.Map.Strict              as M
@@ -44,14 +43,8 @@ main = execParser opts >>= _main
         print exc
         return defaultServusConf
     _main (GlobalOpts c) = do
-        _conf     <- either (def) (return) =<< parseServusConf c
-        _library  <- newTVarIO $ newTaskLibrary _conf
-        _nursery  <- newTChanIO
-        _bullpen  <- newTVarIO $ newTaskBullpen
-        _arena    <- newTVarIO $ newTaskArena
-        _mortuary <- newTChanIO
-
-        let _state   = ServerState {..}
+        _conf  <- either def return =<< parseServusConf c
+        _state <- newServerState _conf
 
         forkThread _threads $ mesosFrameworkLoop _state
         forkThread _threads $ restApiLoop _state
