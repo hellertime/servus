@@ -64,10 +64,14 @@ restApi = do
 
     delete "/run/:name/:taskid" $ do
         ...
-
+--}
     post "/run/" $ do
-        ...
+       conf <- jsonData
+       (liftTask $ runTaskConf conf) >>= \case
+           Left err  -> status status404
+	   Right tid -> WST.json $ object [ "tid" .= show tid ]
 
+{--
     post "/run/:name/" $ do
         ...
         --}

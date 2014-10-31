@@ -2,6 +2,7 @@
 
 module Servus.Mesos where
 
+import           Control.Monad
 import qualified Data.ByteString.Char8  as C8
 import           Data.Functor                 (fmap)
 import           Data.Monoid                  ((<>))
@@ -15,7 +16,13 @@ import Servus.Server
 
 -- | Define the mesos scheduler directly over the server state
 instance ToScheduler ServerState where
-    registered servus _ _ _ = T.putStrLn $ (_mcName $ _scMesos $ _conf servus) <> ": registered"
+    registered server _ _ _ = T.putStrLn $ (_mcName $ _scMesos $ _conf server) <> ": registered"
+
+    resourceOffers server driver offers = do
+        readyOfferGroups <- matchOffers offers server
+        forM_ readyOfferGroups $ \readyOfferGroup -> do
+            runTasks readyOfferGroup server $ \offers tasks -> do
+                launchTasks driver offers tasks (Filters Nothing)
 
 mesosFrameworkLoop :: ServerState -> IO ()
 mesosFrameworkLoop server = do 

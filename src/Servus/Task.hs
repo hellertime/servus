@@ -6,14 +6,18 @@ module Servus.Task where
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.Map.Strict       as M
 import           Data.RangeSpace
+import qualified Data.Text 	       as T
+import 		 Data.Text.Encoding           (encodeUtf8)
 import           Data.Time
-import           System.Mesos.Types
+import           System.Mesos.Types           (TaskInfo (..))
+import qualified System.Mesos.Types    as MT
 
-import           Servus.Config                (ServusConf (..), TaskConf (..), TaskName)
+import           Servus.Config
 
 -- | 'TaskSchedule' is used by the scheduler when selecting a task to run
 data TaskSchedule = TaskSchedule
     { _tsTimeBounds :: Maybe (Bounds UTCTime)
+    , _tsReadyTime :: UTCTime
     }
   deriving (Show, Eq, Ord)
 
@@ -22,34 +26,42 @@ data TaskSchedule = TaskSchedule
 data Task a = Task 
     { _tConf  :: TaskConf
     , _tSched :: TaskSchedule
-    , _tInfo  :: TaskInfo
+    , _tInfo  :: MT.TaskInfo
     }
   deriving (Show, Eq)
 
 instance Ord (Task a) where
-    compare (Task x _ _) (Task y _ _) = compare x y
+    compare (Task cx sx _) (Task cy sy _) = (compare cx cy) `compare` (compare sx sy)
 
 -- | States of a 'Task'
-data Warmup
 data Ready
 data Running
 data Finished
 
 -- | Build and return a new task instance, based on a config and an id
-newTask :: TaskConf -> TaskID -> Task Warmup
-newTask conf tid = Task conf sched info
+newTask :: TaskConf -> MT.TaskID -> IO (Task Ready)
+newTask conf tid = getCurrentTime >>= \t -> return $ Task conf (sched {_tsReadyTime = t}) info
   where
-    sched = TaskSchedule Nothing
-    info = TaskInfo { taskInfoName       = "" -- ^ must populate strict fields
-                    , taskID             = tid
-                    , taskSlaveID        = ""
-                    , taskResources      = []
-                    , taskImplementation = TaskCommand cmd
-                    , taskData           = Nothing
-                    , taskContainer      = Nothing
-                    , taskHealthCheck    = Nothing
-                    }
-    cmd = CommandInfo [] Nothing (ShellCommand "") Nothing
+    sched = TaskSchedule Nothing (UTCTime (ModifiedJulianDay 0) (secondsToDiffTime 0))
+    info  = MT.TaskInfo { taskInfoName       = encodeUtf8 $ _tcName conf
+                        , taskID             = tid
+                        , taskSlaveID        = "" -- ^ must populate strict fields
+                        , taskResources      = map fromResource (maybe [] _rsrcs $ _tcResources conf)
+                        , taskImplementation = MT.TaskCommand cmd
+                        , taskData           = Nothing
+                        , taskContainer      = Nothing
+                        , taskHealthCheck    = Nothing
+                        }
+    cmd  = MT.CommandInfo [] Nothing (MT.ShellCommand "") Nothing
+
+fromResource :: (T.Text, Resource) -> MT.Resource
+fromResource = uncurry go
+  where
+    go name value = MT.Resource { resourceName = encodeUtf8 name, resourceValue = go' value, resourceRole = Nothing }
+    go' (Scalar n)  = MT.Scalar n
+    go' (Ranges rs) = MT.Ranges $ map (\(l,h) -> (fromIntegral l, fromIntegral h)) rs
+    go' (Set    s)  = MT.Set $ map encodeUtf8 s
+    go' (Text   t)  = MT.Text $ encodeUtf8 t
 
 -- | The 'TaskLibrary' is a collection of 'TaskConf' indexed by 'TaskName'
 -- On startup the server puts any tasks found in the configuration into
@@ -60,6 +72,15 @@ newtype TaskLibrary = TaskLibrary { fromTaskLibrary :: M.Map TaskName TaskConf }
 -- | Create a 'TaskLibrary' by extracting the 'TaskConf' from the 'ServusConf'
 newTaskLibrary :: ServusConf -> TaskLibrary
 newTaskLibrary = TaskLibrary . M.fromList . map (\t -> (_tcName t, t)) . _scTasks
+
+-- | Find the 'TaskConf' in the 'TaskLibrary' with the passed name
+lookupTaskConf :: TaskLibrary -> TaskName -> Maybe TaskConf
+lookupTaskConf (TaskLibrary l) n = M.lookup n l
+
+insertLookupTaskConf :: TaskLibrary -> TaskConf -> (Maybe TaskConf, TaskLibrary)
+insertLookupTaskConf (TaskLibrary l) c = (c', TaskLibrary l')
+  where
+    (c', l') = M.insertLookupWithKey (\_ a _ -> a) (_tcName c) c l
 
 {--
 
