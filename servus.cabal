@@ -31,4 +31,6 @@ executable servus
                         scotty >=0.9,
                         wai-extra,
                         time,
-                        http-types
+                        http-types,
+                        uuid >=1.0,
+                        human-hash >=1.0
