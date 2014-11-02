@@ -3,13 +3,20 @@
 
 module Servus.Task where
 
+import           Control.Arrow                  ((***))
+import qualified Data.ByteString       as B
 import qualified Data.ByteString.Char8 as C8
+import           Data.Digest.Human              (humanHash)
 import qualified Data.Map.Strict       as M
+import           Data.Maybe
 import           Data.RangeSpace
 import qualified Data.Text 	       as T
-import 		 Data.Text.Encoding           (encodeUtf8)
+import 		 Data.Text.Encoding             (encodeUtf8)
 import           Data.Time
-import           System.Mesos.Types           (TaskInfo (..))
+import           Data.UUID.V4                   (nextRandom)
+import           Data.UUID.V5                   (generateNamed)
+import qualified Data.UUID             as UUID
+import           System.Mesos.Types             (TaskInfo (..), TaskID (..), ExecutorID (..))
 import qualified System.Mesos.Types    as MT
 
 import           Servus.Config
@@ -47,12 +54,11 @@ newTask conf tid = getCurrentTime >>= \t -> return $ Task conf (sched {_tsReadyT
                         , taskID             = tid
                         , taskSlaveID        = "" -- ^ must populate strict fields
                         , taskResources      = map fromResource (maybe [] _rsrcs $ _tcResources conf)
-                        , taskImplementation = MT.TaskCommand cmd
+                        , taskImplementation = fromCommandConf tid $ _tcCommand conf
                         , taskData           = Nothing
                         , taskContainer      = Nothing
                         , taskHealthCheck    = Nothing
                         }
-    cmd  = MT.CommandInfo [] Nothing (MT.ShellCommand "") Nothing
 
 fromResource :: (T.Text, Resource) -> MT.Resource
 fromResource = uncurry go
@@ -62,6 +68,71 @@ fromResource = uncurry go
     go' (Ranges rs) = MT.Ranges $ map (\(l,h) -> (fromIntegral l, fromIntegral h)) rs
     go' (Set    s)  = MT.Set $ map encodeUtf8 s
     go' (Text   t)  = MT.Text $ encodeUtf8 t
+
+fromCommandConf :: MT.TaskID -> CommandConf -> MT.TaskExecutionInfo
+fromCommandConf tid = go
+  where
+    go cc | isJust $ _ccExecutor cc = MT.TaskExecutor $ toExecutorInfo tid cc
+          | otherwise               = MT.TaskCommand  $ toCommandInfo cc
+
+fromVolume :: Volume -> MT.Volume
+fromVolume v = let volumeContainerPath = encodeUtf8 $ _volContainerPath v
+                   volumeHostPath      = fmap encodeUtf8 $ _volHostPath v
+                   volumeMode          = if _volReadOnly v then MT.ReadOnly else MT.ReadWrite
+                in MT.Volume {..}
+
+toContainerInfo :: ContainerConf -> MT.ContainerInfo
+toContainerInfo (DockerConf image vols) = let containerInfoContainerType = MT.Docker $ encodeUtf8 image
+                                              containerInfoVolumes       = map fromVolume $ _vols vols
+                                          in MT.ContainerInfo {..}
+
+toExecutorInfo :: MT.TaskID -> CommandConf -> MT.ExecutorInfo
+toExecutorInfo tid = go
+  where
+    go cc = let (Just executorConf)       = _ccExecutor cc
+                executorInfoExecutorID    = generateExecutorID executorConf
+                executorInfoFrameworkID   = "" -- ^ Will be filled in inside the scheduler loop
+                executorInfoCommandInfo   = toCommandInfo cc
+                executorInfoContainerInfo = fmap toContainerInfo $ _ccContainer cc
+                executorInfoResources     = map fromResource (maybe [] _rsrcs $ _execResources executorConf)
+                executorName              = Just $ encodeUtf8 $ _execName executorConf
+                executorSource            = Just $ MT.fromTaskID tid
+                executorData              = Nothing
+            in MT.ExecutorInfo {..}
+
+fromEnvVar :: (T.Text, T.Text) -> (C8.ByteString, C8.ByteString)
+fromEnvVar = encodeUtf8 *** encodeUtf8
+
+fromUri :: Uri -> MT.CommandURI
+fromUri (Uri val exec ext) = MT.CommandURI (encodeUtf8 val) exec ext
+
+toCommandValue :: CommandSpec -> MT.CommandValue
+toCommandValue (ShellCommand cmd)      = MT.ShellCommand $ encodeUtf8 cmd
+toCommandValue (ExecCommand arg0 argv) = MT.RawCommand (encodeUtf8 arg0) $ map encodeUtf8 argv
+
+toCommandInfo :: CommandConf -> MT.CommandInfo
+toCommandInfo cc = let commandInfoURIs    = map fromUri (maybe [] _uris $ _ccUris cc)
+                       commandEnvironment = fmap (map fromEnvVar . _evs) $ _ccEnv cc
+                       commandValue       = toCommandValue $ _ccRun cc
+                       commandUser        = fmap encodeUtf8 $ _ccUser cc
+                    in MT.CommandInfo {..}
+
+-- | Generate a TaskID using a human hash of a random UUID
+randomTaskID :: TaskConf -> IO TaskID
+randomTaskID tc = nextRandom >>= return . TaskID . textEncode . taskIdGen
+  where
+    textEncode = encodeUtf8 . T.append (flip T.snoc '.' $ _tcName tc) . T.intercalate "_"
+    taskIdGen = humanHash 5 . UUID.toString
+
+-- | Generate a ExecutorID deterministcally
+generateExecutorID :: ExecutorConf -> ExecutorID
+generateExecutorID cc = ExecutorID $ textEncode $ executorIdGen $ executorUuid
+  where
+    (Just executorUuidNamespace) = UUID.fromString "e2b82c48-fb4b-40e8-bff7-8daf0424b0d9"
+    textEncode = encodeUtf8 . T.append (flip T.snoc '.' $ _execName cc) . T.intercalate "_"
+    executorIdGen = humanHash 5 . UUID.toString
+    executorUuid = generateNamed executorUuidNamespace $ nameEncode cc
+    nameEncode = B.unpack . encodeUtf8 . _execName
 
 -- | The 'TaskLibrary' is a collection of 'TaskConf' indexed by 'TaskName'
 -- On startup the server puts any tasks found in the configuration into

@@ -72,7 +72,7 @@ defaultMesosConf = MesosConf {..}
     _mcUser            = ""
     _mcFailoverTimeout = Nothing
     _mcCheckpoint      = Nothing
-    _mcRole            = Nothing
+    _mcRole            = Just "*"
     _mcHostname        = Nothing
     _mcPrincipal       = Nothing
 
@@ -99,7 +99,7 @@ data Uri = Uri
     }
   deriving (Show, Eq, Ord)
 
-data UriList = UriList [Uri]
+data UriList = UriList { _uris :: [Uri] }
   deriving (Show, Eq, Ord)
 
 data ExecutorConf = ExecutorConf
@@ -115,7 +115,7 @@ data Volume = Volume
     }
   deriving (Show, Eq, Ord)
 
-data VolumeList = VolumeList [Volume]
+data VolumeList = VolumeList { _vols :: [Volume] }
   deriving (Show, Eq, Ord)
 
 data ContainerConf = DockerConf

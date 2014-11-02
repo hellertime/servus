@@ -8,7 +8,6 @@ import           Control.Applicative
 import           Control.Concurrent.STM
 import           Control.Monad
 import           Control.Monad.Reader
-import           Data.Digest.Human               (humanHash)
 import 		 Data.List                       (sortBy, groupBy)
 import qualified Data.Map.Strict         as M
 import qualified Data.Set                as S
@@ -16,9 +15,7 @@ import           Data.Text                       (Text)
 import qualified Data.Text               as T
 import           Data.Text.Encoding              (encodeUtf8)   
 import           Data.Time.Clock                 (diffUTCTime)
-import           Data.UUID.V4                    (nextRandom)
-import qualified Data.UUID               as UUID
-import           System.Mesos.Types              (TaskInfo (..), Offer (..), Status, TaskID (..), SlaveID (..), OfferID (..))
+import           System.Mesos.Types              (TaskInfo (..), Offer (..), Status, TaskID (..), SlaveID (..), OfferID (..), ExecutorInfo (..))
 import qualified System.Mesos.Types      as MT
 
 import           Servus.Config
@@ -54,13 +51,6 @@ newtype TaskM a = TaskM { runTaskM :: ReaderT ServerState IO a }
 taskM :: MonadTrans t => TaskM a -> t TaskM a
 taskM = lift
 
--- | Generate a TaskID using a human hash of a random UUID
-randomTaskID :: TaskConf -> IO TaskID
-randomTaskID tc = nextRandom >>= return . TaskID . textEncode . taskIdGen
-  where
-    textEncode = encodeUtf8 . T.append (flip T.snoc '.' $ _tcName tc) . T.intercalate "_"
-    taskIdGen = humanHash 5 . UUID.toString
-
 -- | Obtain the 'TaskLibrary' from the 'ServerState'
 getTaskLibrary :: ServerState -> IO TaskLibrary
 getTaskLibrary = atomically . readTVar . _library
@@ -91,8 +81,8 @@ runTaskConf conf server = do
     task    <- newTask conf tid
     if canRun task bullpen
         then atomically $ do
-            modifyTVar' tvar (S.insert task) 
-            return $ Right tid
+                modifyTVar' tvar (S.insert task) 
+                return $ Right tid
         else return $ Left "Cannot run task..."
   where
     canRun task          = null . (takeWhile ((checkLaunchRate task) . (diffReadyTime task))) . (dropOthers task) . S.toAscList
@@ -110,9 +100,9 @@ matchOffers offers server = do
     -- TODO: Really implement matching
     return $ groupBy eqSlaveId $ sortBy ordSlaveId $ zip offers $ (map Just $ S.toAscList bullpen) ++ (repeat Nothing) -- ^ offers paired with Nothing are discarded
   where
-    getSlaveId = offerSlaveID . fst
+    getSlaveId     = offerSlaveID . fst
     ordSlaveId x y = getSlaveId x `compare` getSlaveId y
-    eqSlaveId x y = getSlaveId x == getSlaveId y
+    eqSlaveId x y  = getSlaveId x == getSlaveId y
 
 -- | Aliaases to make runTasks types easier
 type ReadyOffer       = (Offer, Maybe (Task Ready))
@@ -139,6 +129,12 @@ runTasks pairs server f = do
 	modifyTVar' tvarA (M.insert (taskID $ _tInfo task') task')
 	return ((offer,_tInfo task'):rs, us)
     runTask' :: Offer -> Task Ready -> Task Running
-    runTask' offer task = task { _tInfo = (_tInfo task) { taskSlaveID = offerSlaveID offer } }
-
-
+    runTask' offer task = let info = (_tInfo task)
+                              info' = info { taskSlaveID        = offerSlaveID offer
+                                           , taskImplementation = withFrameworkId offer $ taskImplementation info
+                                           }
+                          in  task { _tInfo = info' }
+    withFrameworkId :: Offer -> MT.TaskExecutionInfo -> MT.TaskExecutionInfo
+    withFrameworkId offer (MT.TaskExecutor info) = MT.TaskExecutor $ updateFrameworkId offer info
+    withFrameworkId _     info                   = info
+    updateFrameworkId offer info = info { executorInfoFrameworkID = offerFrameworkID offer}
