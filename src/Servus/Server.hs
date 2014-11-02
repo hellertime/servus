@@ -1,4 +1,5 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 
@@ -120,8 +121,9 @@ runTasks pairs server f = do
     tvarA = _arena server
     tvarB = _bullpen server
     assignOffer :: OfferAssignments -> ReadyOffer -> IO OfferAssignments
-    assignOffer      (rs, us) (offer, Nothing)   = return (rs, offer:us)
-    assignOffer farg@(rs, us) (offer, Just task) = atomically $ runTask offer task farg `orElse` return (rs, offer:us)
+    assignOffer oa = \case
+                      (offer, Nothing)   -> return $ fmap (offer:) oa
+                      (offer, Just task) -> atomically $ runTask offer task oa `orElse` (return $ fmap (offer:) oa)
     runTask :: Offer -> Task Ready -> OfferAssignments -> STM OfferAssignments
     runTask offer task (rs, us) = do
     	let task' = runTask' offer task
@@ -135,6 +137,7 @@ runTasks pairs server f = do
                                            }
                           in  task { _tInfo = info' }
     withFrameworkId :: Offer -> MT.TaskExecutionInfo -> MT.TaskExecutionInfo
-    withFrameworkId offer (MT.TaskExecutor info) = MT.TaskExecutor $ updateFrameworkId offer info
-    withFrameworkId _     info                   = info
+    withFrameworkId offer = \case
+                             (MT.TaskExecutor info) -> MT.TaskExecutor $ updateFrameworkId offer info
+                             info                   -> info
     updateFrameworkId offer info = info { executorInfoFrameworkID = offerFrameworkID offer}

@@ -27,7 +27,7 @@ instance ToScheduler ServerState where
       where
         go []       = declineAll offers
         go (o:os)   = runOffers o >> go os
-        runOffers o = runTasks o server $ \o t -> (putStrLn $ show (o,t)) >> launchTasks driver o t (Filters Nothing) 
+        runOffers o = runTasks o server $ \o t -> launchTasks driver o t (Filters Nothing) 
         declineAll  = mapM_ $ \offer -> declineOffer driver (offerID offer) (Filters Nothing)
         readyOffers = matchOffers offers server
     
