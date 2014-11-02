@@ -1,5 +1,5 @@
 { "name": "postdemo"
-, "resources": { "cpus": 1.0, "memory": 64 }
+, "resources": { "cpus": 1.0, "mem": 64 }
 , "command": {
     "run": "env"
 }
