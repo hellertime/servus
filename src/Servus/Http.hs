@@ -3,6 +3,7 @@
 
 module Servus.Http where
 
+import           Control.Applicative                         ((<|>))
 import           Control.Concurrent.STM
 import           Control.Monad.Reader
 import           Data.Aeson
@@ -12,7 +13,7 @@ import           Data.Text.Encoding                          (decodeUtf8)
 import           Data.Text.Lazy                              (Text, empty, fromStrict)
 import           Network.HTTP.Types
 import           Network.Wai.Middleware.RequestLogger
-import qualified System.Mesos.Types                   as MT
+import qualified System.Mesos.Types                   as MZ
 import           Web.Scotty.Trans
 import qualified Web.Scotty.Trans                     as WST
 
@@ -54,7 +55,7 @@ instance ToJSON ApiRunList where
       where
         links = object $ (map toLink running) ++ (map toLink ready)
         toLink l = "href" .= ("/run/?name=" <> (_tcName $ _tConf l) <> "&tid=" <> (text $ _tInfo l))
-        text = decodeUtf8 . MT.fromTaskID . MT.taskID
+        text = decodeUtf8 . MZ.fromTaskID . MZ.taskID
 
 liftTask f = taskM $ ask >>= liftIO . f
 
@@ -68,6 +69,13 @@ restApi = do
         arenaTasks <- liftTask getArenaTasks
         bullpenTasks <- liftTask getBullpenTasks
         WST.json $ ApiRunList arenaTasks bullpenTasks
+
+    get "/run/" $ do
+        tid <- param "tid"
+        (liftTask $ getTask $ MZ.TaskID tid) >>= \case
+            Nothing                 -> status status404
+            Just (Left runningTask) -> WST.json $ _tConf runningTask
+            Just (Right readyTask)  -> WST.json $ _tConf readyTask
 
 {--
     get "/run/:name/" $ do

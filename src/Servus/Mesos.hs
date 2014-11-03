@@ -3,6 +3,7 @@
 
 module Servus.Mesos where
 
+import           Control.Concurrent.STM
 import           Control.Monad
 import qualified Data.ByteString.Char8  as C8
 import           Data.Functor                 (fmap)
@@ -40,11 +41,11 @@ instance ToScheduler ServerState where
 
 mesosFrameworkLoop :: ServerState -> IO ()
 mesosFrameworkLoop server = do 
-    putStrLn "NO DONE"
     stopStatus <- withSchedulerDriver server framework master creds $ \driver -> do
-        runStatus <- run driver
+        startStatus <- start driver
+        atomically $ putTMVar (_driver server) driver
+        runStatus <- await driver
         stop driver shouldRestart
-    putStrLn "DONE"
     return ()
   where
     utf8          = TE.encodeUtf8
