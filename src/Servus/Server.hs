@@ -9,23 +9,23 @@ import           Control.Applicative
 import           Control.Concurrent.STM
 import           Control.Monad
 import           Control.Monad.Reader
-import 		 Data.List                       (sortBy, groupBy)
+import 		 Data.List                     (sortBy, groupBy)
 import qualified Data.Map.Strict         as M
 import qualified Data.Set                as S
-import           Data.Text                       (Text)
+import           Data.Text                     (Text)
 import qualified Data.Text               as T
-import           Data.Text.Encoding              (encodeUtf8)   
-import           Data.Time.Clock                 (diffUTCTime)
-import           System.Mesos.Types              (TaskInfo (..), Offer (..), Status, TaskID (..), SlaveID (..), OfferID (..), ExecutorInfo (..))
+import           Data.Text.Encoding            (encodeUtf8)   
+import           Data.Time.Clock               (diffUTCTime)
+import           System.Mesos.Types            (TaskInfo, Offer (..), Status, SlaveID (..), OfferID (..), TaskID (..))
 import qualified System.Mesos.Types      as MT
 
 import           Servus.Config
-import           Servus.Task
+import           Servus.Task             hiding (finishTask)
+import qualified Servus.Task             as ST
 
 data ServerState = ServerState
     { _conf     :: ServusConf                         -- ^ Parsed server configuration
     , _library  :: TVar TaskLibrary                   -- ^ Task library is updated via REST API and during config
---    , _nursery  :: TChan (Task Warmup)                -- ^ The task nursery holds new task instances which were triggered remotely
     , _bullpen  :: TVar (S.Set (Task Ready))          -- ^ Task bullpen holds instances awaiting offers from mesos
     , _arena    :: TVar (M.Map TaskID (Task Running)) -- ^ Task arean holds launched instances
     , _mortuary :: TChan (Task Finished)              -- ^ Task mortuary holds terminal task instances
@@ -40,7 +40,6 @@ instance Ord SlaveID where
 newServerState :: ServusConf -> IO ServerState
 newServerState _conf = do
     _library  <- newTVarIO $ newTaskLibrary _conf
-    _nursery  <- newTChanIO
     _bullpen  <- newTVarIO S.empty
     _arena    <- newTVarIO M.empty
     _mortuary <- newTChanIO
@@ -123,21 +122,24 @@ runTasks pairs server f = do
     assignOffer :: OfferAssignments -> ReadyOffer -> IO OfferAssignments
     assignOffer oa = \case
                       (offer, Nothing)   -> return $ fmap (offer:) oa
-                      (offer, Just task) -> atomically $ runTask offer task oa `orElse` (return $ fmap (offer:) oa)
-    runTask :: Offer -> Task Ready -> OfferAssignments -> STM OfferAssignments
-    runTask offer task (rs, us) = do
-    	let task' = runTask' offer task
-	modifyTVar' tvarB (S.delete task)
-	modifyTVar' tvarA (M.insert (taskID $ _tInfo task') task')
+                      (offer, Just task) -> atomically $ go offer task oa `orElse` (return $ fmap (offer:) oa)
+    go :: Offer -> Task Ready -> OfferAssignments -> STM OfferAssignments
+    go offer task (rs, us) = do
+        let task' = runTask task (offerFrameworkID offer) (offerSlaveID offer)
+	modifyTVar' tvarB $ S.delete task
+	modifyTVar' tvarA $ M.insert (MT.taskID $ _tInfo task') task'
 	return ((offer,_tInfo task'):rs, us)
-    runTask' :: Offer -> Task Ready -> Task Running
-    runTask' offer task = let info = (_tInfo task)
-                              info' = info { taskSlaveID        = offerSlaveID offer
-                                           , taskImplementation = withFrameworkId offer $ taskImplementation info
-                                           }
-                          in  task { _tInfo = info' }
-    withFrameworkId :: Offer -> MT.TaskExecutionInfo -> MT.TaskExecutionInfo
-    withFrameworkId offer = \case
-                             (MT.TaskExecutor info) -> MT.TaskExecutor $ updateFrameworkId offer info
-                             info                   -> info
-    updateFrameworkId offer info = info { executorInfoFrameworkID = offerFrameworkID offer}
+
+-- | Remove a task from the arena, and update its task status
+finishTask :: MT.TaskStatus -> ServerState -> IO ()
+finishTask status server = atomically $ do
+    task <- readTVar tvarA >>= \arena -> let (task, arena') = remove tid arena 
+                                        in writeTVar tvarA arena' >> return task
+    case task of
+        Nothing -> return ()
+        Just t  -> writeTChan tchanM (t { _tStatus = Just status })
+  where
+    tvarA  = _arena server
+    tchanM = _mortuary server
+    tid    = MT.taskStatusTaskID status
+    remove = M.updateLookupWithKey (\_ _ -> Nothing)
