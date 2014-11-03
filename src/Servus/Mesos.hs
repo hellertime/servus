@@ -12,10 +12,8 @@ import qualified Data.Text.IO           as T
 import           System.Mesos.Scheduler
 import           System.Mesos.Types
 
-import Servus.Config
-import Servus.Server
-
-import Debug.Trace
+import           Servus.Config
+import           Servus.Server
 
 -- | Define the mesos scheduler directly over the server state
 instance ToScheduler ServerState where
@@ -32,7 +30,11 @@ instance ToScheduler ServerState where
         declineAll  = mapM_ $ \offer -> declineOffer driver (offerID offer) (Filters Nothing)
         readyOffers = matchOffers offers server
     
-    statusUpdate server driver status = putStrLn $ "servus: task " <> show (taskStatusTaskID status) <> " is in state " <> show (taskStatusState status)
+    statusUpdate server driver status = do
+        if isTerminal $ taskStatusState status
+            then finishTask status server
+            else return ()
+        putStrLn $ "servus: task " <> show (taskStatusTaskID status) <> " is in state " <> show (taskStatusState status)
 
     errorMessage _ _ msg = C8.putStrLn msg
 

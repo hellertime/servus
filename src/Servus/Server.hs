@@ -51,13 +51,25 @@ newtype TaskM a = TaskM { runTaskM :: ReaderT ServerState IO a }
 taskM :: MonadTrans t => TaskM a -> t TaskM a
 taskM = lift
 
+-- | Obtain the list of tasks presently in the arena
+-- Note the conversion through Set, so we sort by Task not Task ID
+getArenaTasks :: ServerState -> IO [Task Running]
+getArenaTasks = fmap toTaskList . readTVarIO . _arena
+  where
+    toTaskList :: M.Map TaskID (Task Running) -> [Task Running]
+    toTaskList = S.toAscList . S.fromList . M.elems
+
+-- | Obtain the list of tasks presently in the bullpen
+getBullpenTasks :: ServerState -> IO [Task Ready]
+getBullpenTasks = fmap S.toAscList . readTVarIO . _bullpen
+
 -- | Obtain the 'TaskLibrary' from the 'ServerState'
 getTaskLibrary :: ServerState -> IO TaskLibrary
-getTaskLibrary = atomically . readTVar . _library
+getTaskLibrary = readTVarIO . _library
 
 -- | Get a 'TaskConf' from the 'TaskLibrary' if it exists, otherwise 'Nothing'
 getTaskConf :: TaskName -> ServerState -> IO (Maybe TaskConf)
-getTaskConf name server = getTaskLibrary server >>= return . flip lookupTaskConf name
+getTaskConf name = fmap (flip lookupTaskConf name) . getTaskLibrary
 
 -- | Put a 'TaskConf' into the 'TaskLibrary' if a previous version exists
 -- it will be returned by the function
