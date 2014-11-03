@@ -8,15 +8,17 @@ import           Control.Monad.Reader
 import           Data.Aeson
 import qualified Data.Map.Strict                      as M
 import           Data.Monoid                                 ((<>))
+import           Data.Text.Encoding                          (decodeUtf8)
 import           Data.Text.Lazy                              (Text, empty, fromStrict)
 import           Network.HTTP.Types
 import           Network.Wai.Middleware.RequestLogger
+import qualified System.Mesos.Types                   as MT
 import           Web.Scotty.Trans
 import qualified Web.Scotty.Trans                     as WST
 
-import Servus.Config
-import Servus.Server
-import Servus.Task
+import           Servus.Config
+import           Servus.Server
+import           Servus.Task
 
 data ApiEntryPoint = ApiEntryPoint
     { _epRun     :: Text
@@ -38,12 +40,21 @@ instance ToJSON ApiTaskList where
       where
         links = tasks library
         tasks (TaskLibrary library) = object $ map toLink (M.keys library)
-        toLink l = "href" .= ("/tasks/" <> l) 
+        toLink l = "href" .= ("/tasks/?name=" <> l) 
 
 data ApiTask = ApiTask TaskConf
 
 instance ToJSON ApiTask where
     toJSON (ApiTask task) = toJSON task
+
+data ApiRunList = ApiRunList [Task Running] [Task Ready]
+
+instance ToJSON ApiRunList where
+    toJSON (ApiRunList running ready) = object [ "links" .= links ]
+      where
+        links = object $ (map toLink running) ++ (map toLink ready)
+        toLink l = "href" .= ("/run/?name=" <> (_tcName $ _tConf l) <> "&tid=" <> (text $ _tInfo l))
+        text = decodeUtf8 . MT.fromTaskID . MT.taskID
 
 liftTask f = taskM $ ask >>= liftIO . f
 
@@ -52,10 +63,13 @@ restApi = do
     middleware logStdoutDev
     get "/" $ do
         WST.json $ ApiEntryPoint "/run" "/tasks" "/history"
-{--
-    get "/run/" $ do
-        ...
 
+    get "/run/" $ do
+        arenaTasks <- liftTask getArenaTasks
+        bullpenTasks <- liftTask getBullpenTasks
+        WST.json $ ApiRunList arenaTasks bullpenTasks
+
+{--
     get "/run/:name/" $ do
         ...
 
@@ -79,7 +93,7 @@ restApi = do
         library <- liftTask getTaskLibrary
         WST.json $ ApiTaskList library
 
-    get "/tasks/:name/" $ do
+    get "/tasks/" $ do
         name <- param "name"
         (liftTask $ getTaskConf name) >>= \case
             Nothing   -> status status404
@@ -88,7 +102,7 @@ restApi = do
     post "/tasks/" $ do
         conf <- jsonData
         liftTask $ putTaskConf conf
-        setHeader "Location" ("/tasks/" <> (fromStrict $ _tcName conf) <> "/")
+        setHeader "Location" ("/tasks/?name=" <> (fromStrict $ _tcName conf))
         status status201
         {--
     get "/history/" $ do
