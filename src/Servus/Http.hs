@@ -77,6 +77,14 @@ restApi = do
             Just (Left runningTask) -> WST.json $ _tConf runningTask
             Just (Right readyTask)  -> WST.json $ _tConf readyTask
 
+    delete "/run/" $ do
+        tid <- param "tid"
+        (liftTask $ killTask $ MZ.TaskID tid) >>= \case
+            MZ.NotStarted -> WST.json $ object [ "status" .= ("not-started" <> empty) ]
+            MZ.Running    -> WST.json $ object [ "status" .= ("running" <> empty) ]
+            MZ.Aborted    -> WST.json $ object [ "status" .= ("aborted" <> empty) ]
+            MZ.Stopped    -> WST.json $ object [ "status" .= ("stopped" <> empty) ]
+
 {--
     get "/run/:name/" $ do
         ...

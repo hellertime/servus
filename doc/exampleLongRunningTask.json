@@ -1,0 +1,7 @@
+{ "name": "longdemo"
+, "resources": { "cpus": 1.0, "mem": 64 }
+, "command": {
+    "run": "ps -ef && sleep 500"
+}
+, "trigger": { "remote": true }
+}
