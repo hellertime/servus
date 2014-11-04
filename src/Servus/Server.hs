@@ -183,3 +183,19 @@ finishTask status server = atomically $ do
 -- | Send a 'killTask' to a given taskID
 killTask :: MZ.TaskID -> ServerState -> IO MZ.Status
 killTask tid server = (atomically $ readTMVar $ _driver server) >>= flip MZ.killTask tid
+
+-- | The mortician loop waits on the _mortuary TChan
+-- and will either send tasks off to the garbage collector
+-- or it will put them back in the bullpen if they should
+-- be restarted
+morticianLoop :: ServerState -> IO ()
+morticianLoop server = do
+    task <- atomically $ readTChan tchanM
+    if _tcRelaunchOnExit trigger
+        then getTaskConf name >>= fmap (flip runTaskConf server)
+        else return ()
+    return ()
+  where
+    tchanM  = _mortuary server
+    name    = _tcName $ _tConf task
+    trigger = _tcTrigger $ _tConf task

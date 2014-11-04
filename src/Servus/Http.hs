@@ -91,9 +91,6 @@ restApi = do
 
     get "/run/:name/:taskid" $ do
         ...
-
-    delete "/run/:name/:taskid" $ do
-        ...
 --}
     post "/run/" $ do
        conf <- jsonData

@@ -46,6 +46,7 @@ main = execParser opts >>= _main
         _conf  <- either def return =<< parseServusConf c
         _state <- newServerState _conf
 
+        forkThread _threads $ morticianLoop _state
         forkThread _threads $ mesosFrameworkLoop _state
         forkThread _threads $ restApiLoop _state
 

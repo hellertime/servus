@@ -139,14 +139,15 @@ data CommandConf = CommandConf
   deriving (Show, Eq, Ord)
 
 data TriggerConf = TriggerConf
-    { _tcRemote       :: Bool
-    , _tcMaxInstances :: Integer
-    , _tcLaunchRate   :: Double
-    , _tcScheduleExpr :: Maybe String
+    { _tcRemote         :: Bool
+    , _tcMaxInstances   :: Integer
+    , _tcLaunchRate     :: Double
+    , _tcRelaunchOnExit :: Bool
+    , _tcScheduleExpr   :: Maybe String
     }
   deriving (Show, Eq, Ord)
 
-defaultTrigger = TriggerConf True 1 1.0 Nothing
+defaultTrigger = TriggerConf True 1 1.0 False Nothing
 
 type TaskName = T.Text
 
@@ -186,18 +187,20 @@ instance FromJSON MesosConf where
 
 instance FromJSON TriggerConf where
     parseJSON (Object o) = do
-        _tcRemote       <- o .:? "remote" .!= (if HML.member "schedule" o then False else True)
-        _tcMaxInstances <- o .:? "maxInstances" .!= 1
-        _tcLaunchRate   <- o .:? "launchRate" .!= 1.0
-        _tcScheduleExpr <- o .:? "schedule"
+        _tcRemote         <- o .:? "remote" .!= (if HML.member "schedule" o then False else True)
+        _tcMaxInstances   <- o .:? "maxInstances" .!= 1
+        _tcLaunchRate     <- o .:? "launchRate" .!= 1.0
+        _tcRelaunchOnExit <- o .:? "relaunchOnExit" .!= False
+        _tcScheduleExpr   <- o .:? "schedule"
         return TriggerConf {..}
 
 instance ToJSON TriggerConf where
     toJSON TriggerConf {..} = object . execWriter $
-        do tell [ "remote"       .= _tcRemote
-                , "maxInstances" .= _tcMaxInstances
-                , "launchRate"   .= _tcLaunchRate
-                , "schedule"     .= _tcScheduleExpr
+        do tell [ "remote"         .= _tcRemote
+                , "maxInstances"   .= _tcMaxInstances
+                , "launchRate"     .= _tcLaunchRate
+                , "relaunchOnExit" .= _tcRelaunchOnExit
+                , "schedule"       .= _tcScheduleExpr
                 ]
 
 instance FromJSON TaskConf where
