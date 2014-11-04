@@ -147,10 +147,11 @@ type OfferAssignments = ([RunningOffer], [MZ.Offer])
 -- Tasks are removed from the bullpen and put into the arena
 runTasks :: [ReadyOffer] -> ServerState -> ([MZ.OfferID] -> [MZ.TaskInfo] -> IO MZ.Status) -> IO MZ.Status
 runTasks pairs server f = do
-    (ready, un) <- foldM assignOffer ([],[]) pairs
+    (ready, un) <- foldM assignOffer oa pairs
     let (offers, tasks) = unzip ready
     f (map MZ.offerID $ offers ++ un) tasks
   where
+    oa    = ([],[])
     tvarA = _arena server
     tvarB = _bullpen server
     assignOffer :: OfferAssignments -> ReadyOffer -> IO OfferAssignments
