@@ -189,13 +189,15 @@ killTask tid server = (atomically $ readTMVar $ _driver server) >>= flip MZ.kill
 -- or it will put them back in the bullpen if they should
 -- be restarted
 morticianLoop :: ServerState -> IO ()
-morticianLoop server = do
-    task <- atomically $ readTChan tchanM
-    if _tcRelaunchOnExit trigger
-        then getTaskConf name >>= fmap (flip runTaskConf server)
-        else return ()
-    return ()
+morticianLoop server = (atomically $ readTChan tchanM) >>= relaunch >>= log
   where
-    tchanM  = _mortuary server
-    name    = _tcName $ _tConf task
-    trigger = _tcTrigger $ _tConf task
+    log = const $ return () -- TODO: Logging
+    tchanM = _mortuary server
+    relaunch task = let name    = _tcName    $ _tConf task
+                        trigger = _tcTrigger $ _tConf task
+                    in if _tcRelaunchOnExit trigger
+                            then getTaskConf name server >>= maybe (return noTask) reRun
+                            else return noRequest
+    noTask = Left "task not in library. cannot relaunch"
+    noRequest = Left "no relauch requested"
+    reRun = flip runTaskConf server
