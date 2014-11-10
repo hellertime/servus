@@ -5,11 +5,12 @@
 
 module Servus.Server where
 
+import           Control.Arrow                 ((&&&))
 import           Control.Applicative
 import           Control.Concurrent.STM
 import           Control.Monad
 import           Control.Monad.Reader
-import 		 Data.List                     (sortBy, groupBy)
+import 		 Data.List                     (sortBy, groupBy, genericLength)
 import qualified Data.Map.Strict         as M
 import qualified Data.Set                as S
 import           Data.Text                     (Text)
@@ -107,6 +108,7 @@ putTaskConf conf server = atomically $ do
 -- If the current environment cannot accept the task an
 -- error will be reported Left, otherwise the taskId of the 
 -- accepted task will be returned Right
+{--
 runTaskConf :: TaskConf -> ServerState -> IO (Either Text MZ.TaskID)
 runTaskConf conf server = do
     let tvar = _bullpen server
@@ -123,6 +125,33 @@ runTaskConf conf server = do
     dropOthers task      = dropWhile ((/= (_tcName $ _tConf task)) . _tcName . _tConf)
     diffReadyTime task   = realToFrac . (flip diffUTCTime (_tsReadyTime $ _tSched task)) . _tsReadyTime . _tSched
     checkLaunchRate task = (< (_tcLaunchRate $ _tcTrigger $ _tConf task))
+--}
+runTaskConf :: TaskConf -> ServerState -> IO (Either Text MZ.TaskID)
+runTaskConf conf server = do
+    tid  <- randomTaskID conf
+    task <- newTask conf tid
+    atomically $ do
+        arena   <- readTVar tvarA >>= return . toTaskList
+        bullpen <- readTVar tvarB >>= return . toTaskList
+        let readyTasks     = map fromReadyTask bullpen
+            runningTasks   = map fromRunningTask arena
+            tasks          = dropWhile ((/= taskName task) . taskName) (readyTasks ++ runningTasks)
+            readyTimeDelta = realToFrac . (flip diffUTCTime $ taskReadyTime task) . taskReadyTime
+            recentLaunches = takeWhile ((< taskLaunchRate task) . readyTimeDelta)
+            canRun         = uncurry (&&) . (((< taskInstMax task) . genericLength) &&& (null . recentLaunches))
+        if canRun tasks
+            then modifyTVar' tvarB (M.insert tid task) >> return (Right tid)
+            else return $ Left "Cannot run task"
+
+  where
+    tvarA          = _arena server
+    tvarB          = _bullpen server
+    taskName       = _tcName . _tConf
+    taskReadyTime  = _tsReadyTime . _tSched
+    taskLaunchRate = _tcLaunchRate . _tcTrigger . _tConf
+    taskInstMax    = _tcMaxInstances . _tcTrigger . _tConf
+
+
 
 -- | Find the first match in the bullpen for the given offers
 -- returns a list of lists, where each sub-list is a list of

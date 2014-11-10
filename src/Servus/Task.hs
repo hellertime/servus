@@ -45,6 +45,12 @@ data Ready
 data Running
 data Finished
 
+fromReadyTask :: Task Ready -> Task a
+fromReadyTask (Task a b c d) = Task a b c d
+
+fromRunningTask :: Task Running -> Task a
+fromRunningTask (Task a b c d) = Task a b c d
+
 -- | Build and return a new task instance, based on a config and an id
 newTask :: TaskConf -> MZ.TaskID -> IO (Task Ready)
 newTask conf tid = getCurrentTime >>= \t -> return $ Task conf (sched {_tsReadyTime = t}) info Nothing
