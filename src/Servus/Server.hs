@@ -108,24 +108,6 @@ putTaskConf conf server = atomically $ do
 -- If the current environment cannot accept the task an
 -- error will be reported Left, otherwise the taskId of the 
 -- accepted task will be returned Right
-{--
-runTaskConf :: TaskConf -> ServerState -> IO (Either Text MZ.TaskID)
-runTaskConf conf server = do
-    let tvar = _bullpen server
-    bullpen <- readTVarIO tvar
-    tid     <- randomTaskID conf
-    task    <- newTask conf tid
-    if canRun task bullpen
-        then atomically $ do
-                modifyTVar' tvar (M.insert tid task) 
-                return $ Right tid
-        else return $ Left "Cannot run task..."
-  where
-    canRun task          = null . (takeWhile ((checkLaunchRate task) . (diffReadyTime task))) . (dropOthers task) . toTaskList
-    dropOthers task      = dropWhile ((/= (_tcName $ _tConf task)) . _tcName . _tConf)
-    diffReadyTime task   = realToFrac . (flip diffUTCTime (_tsReadyTime $ _tSched task)) . _tsReadyTime . _tSched
-    checkLaunchRate task = (< (_tcLaunchRate $ _tcTrigger $ _tConf task))
---}
 runTaskConf :: TaskConf -> ServerState -> IO (Either Text MZ.TaskID)
 runTaskConf conf server = do
     tid  <- randomTaskID conf
