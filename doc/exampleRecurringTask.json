@@ -1,0 +1,11 @@
+{ "name": "recur1"
+, "resources": { "cpus": 1.0, "mem": 32 }
+, "command": {
+    "run": "ps -ef && sleep 10"
+}
+, "trigger":  {
+    "relaunchOnExit": true
+,   "maxInstaces": 1
+,   "launchRate": 1.0
+}
+}
