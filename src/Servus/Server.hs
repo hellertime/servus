@@ -12,6 +12,7 @@ import           Control.Monad
 import           Control.Monad.Reader
 import 		 Data.List                     (sortBy, groupBy, genericLength)
 import qualified Data.Map.Strict         as M
+import           Data.Maybe                    (listToMaybe)
 import qualified Data.Set                as S
 import           Data.Text                     (Text)
 import qualified Data.Text               as T
@@ -28,6 +29,7 @@ data ServerState = ServerState
     { _conf     :: ServusConf                            -- ^ Parsed server configuration
     , _driver   :: TMVar MZ.SchedulerDriver              -- ^ Handle to the mesos driver used for async message sends
     , _library  :: TVar TaskLibrary                      -- ^ Task library is updated via REST API and during config
+    , _nursery  :: TChan (TaskConf)                      -- ^ Task nursery holds task confs awaiting the bullpen
     , _bullpen  :: TVar (M.Map MZ.TaskID (Task Ready))   -- ^ Task bullpen holds instances awaiting offers from mesos
     , _arena    :: TVar (M.Map MZ.TaskID (Task Running)) -- ^ Task arean holds launched instances
     , _mortuary :: TChan (Task Finished)                 -- ^ Task mortuary holds terminal task instances
@@ -43,6 +45,7 @@ newServerState :: ServusConf -> IO ServerState
 newServerState _conf = do
     _driver   <- newEmptyTMVarIO
     _library  <- newTVarIO $ newTaskLibrary _conf
+    _nursery  <- newTChanIO
     _bullpen  <- newTVarIO M.empty
     _arena    <- newTVarIO M.empty
     _mortuary <- newTChanIO
@@ -104,6 +107,23 @@ putTaskConf conf server = atomically $ do
     writeTVar tvar library'
     return conf'
 
+-- | Determine if a Task can run based on its schedule and trigger
+-- and inspecting a list of tasks that are already running or ready
+-- The result will either be the number of unused instances remaning
+-- or the remaining balance of time left between launch cycles
+_canRunTask :: Task Ready -> [Task a] -> Either Double Integer
+_canRunTask task = canRun . remainders . dropWhile ((/= taskName task) . taskName)
+  where
+    readyTimeDelta = realToFrac . (flip diffUTCTime $ taskReadyTime task) . taskReadyTime
+    recentLaunches = takeWhile ((< taskLaunchRate task) . readyTimeDelta)
+    remainders     = (((taskInstMax task -) . genericLength) &&& (listToMaybe . recentLaunches))
+    canRun (n,t)   = maybe (Right n) (Left) t
+
+    taskName       = _tcName . _tConf
+    taskReadyTime  = _tsReadyTime . _tSched
+    taskLaunchRate = _tcLaunchRate . _tcTrigger . _tConf
+    taskInstMax    = _tcMaxInstances . _tcTrigger . _tConf
+
 -- | Put a 'TaskConf' into the bullpen to await offers
 -- If the current environment cannot accept the task an
 -- error will be reported Left, otherwise the taskId of the 
@@ -117,23 +137,12 @@ runTaskConf conf server = do
         bullpen <- readTVar tvarB >>= return . toTaskList
         let readyTasks     = map fromReadyTask bullpen
             runningTasks   = map fromRunningTask arena
-            tasks          = dropWhile ((/= taskName task) . taskName) (readyTasks ++ runningTasks)
-            readyTimeDelta = realToFrac . (flip diffUTCTime $ taskReadyTime task) . taskReadyTime
-            recentLaunches = takeWhile ((< taskLaunchRate task) . readyTimeDelta)
-            canRun         = uncurry (&&) . (((< taskInstMax task) . genericLength) &&& (null . recentLaunches))
-        if canRun tasks
-            then modifyTVar' tvarB (M.insert tid task) >> return (Right tid)
-            else return $ Left "Cannot run task"
-
+        case _canRunTask (readyTasks ++ runningTasks) task of
+            Left n | n > 0 -> modifyTVar' tvarB (M.insert tid task) >> return (Right tid)
+            Right t        -> return $ Left $ "Delay relaunch rate exceeded: " <> (show t)
   where
     tvarA          = _arena server
     tvarB          = _bullpen server
-    taskName       = _tcName . _tConf
-    taskReadyTime  = _tsReadyTime . _tSched
-    taskLaunchRate = _tcLaunchRate . _tcTrigger . _tConf
-    taskInstMax    = _tcMaxInstances . _tcTrigger . _tConf
-
-
 
 -- | Find the first match in the bullpen for the given offers
 -- returns a list of lists, where each sub-list is a list of
@@ -195,6 +204,9 @@ finishTask status server = atomically $ do
 killTask :: MZ.TaskID -> ServerState -> IO MZ.Status
 killTask tid server = (atomically $ readTMVar $ _driver server) >>= flip MZ.killTask tid
 
+-- | The nursery loop waits on the _nursery TChan
+-- and runs the task configuration 
+
 -- | The mortician loop waits on the _mortuary TChan
 -- and will either send tasks off to the garbage collector
 -- or it will put them back in the bullpen if they should
@@ -204,6 +216,7 @@ morticianLoop server = (atomically $ readTChan tchanM) >>= relaunch >>= log
   where
     log = const $ return () -- TODO: Logging
     tchanM = _mortuary server
+    tchanN = _nursery server
     relaunch task = let name    = _tcName    $ _tConf task
                         trigger = _tcTrigger $ _tConf task
                     in if _tcRelaunchOnExit trigger
@@ -211,4 +224,4 @@ morticianLoop server = (atomically $ readTChan tchanM) >>= relaunch >>= log
                             else return noRequest
     noTask = Left "task not in library. cannot relaunch"
     noRequest = Left "no relauch requested"
-    reRun = flip runTaskConf server
+    reRun conf = (atomically $ writeTChan tchanN) >> Right "relaunched"
