@@ -33,4 +33,5 @@ executable servus
                         time,
                         http-types,
                         uuid >=1.0,
-                        human-hash >=1.0
+                        human-hash >=1.0,
+                        fast-logger >=2.2

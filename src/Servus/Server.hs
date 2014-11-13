@@ -26,7 +26,8 @@ import           Servus.Task             hiding (finishTask)
 import qualified Servus.Task             as ST
 
 data ServerState = ServerState
-    { _conf     :: ServusConf                            -- ^ Parsed server configuration
+    { _log      :: LoggerSet                             -- ^ Log handle
+    , _conf     :: ServusConf                            -- ^ Parsed server configuration
     , _driver   :: TMVar MZ.SchedulerDriver              -- ^ Handle to the mesos driver used for async message sends
     , _library  :: TVar TaskLibrary                      -- ^ Task library is updated via REST API and during config
     , _nursery  :: TChan (TaskConf)                      -- ^ Task nursery holds task confs awaiting the bullpen
@@ -42,7 +43,7 @@ instance Ord MZ.SlaveID where
     (MZ.SlaveID a) `compare` (MZ.SlaveID b) = a `compare` b
 
 newServerState :: ServusConf -> IO ServerState
-newServerState _conf = do
+newServerState _log _conf = do
     _driver   <- newEmptyTMVarIO
     _library  <- newTVarIO $ newTaskLibrary _conf
     _nursery  <- newTChanIO
@@ -101,34 +102,41 @@ getTaskConf name = fmap (flip lookupTaskConf name) . getTaskLibrary
 -- it will be returned by the function
 putTaskConf :: TaskConf -> ServerState -> IO (Maybe TaskConf)
 putTaskConf conf server = atomically $ do
-    let tvar = _library server
-    library <- readTVar tvar
+    library <- readTVar tvarL
     let (conf', library') = insertLookupTaskConf library conf
-    writeTVar tvar library'
+    writeTVar tvarL library'
     return conf'
+  where
+    tvarL = _library server
+
+-- | Encode if a task can be run
+data RunStatus = DelayLaunch Double -- ^ Can't run, launch delay
+               | ZeroFreeInsts      -- ^ Can't run, no slots
+               | FreeInsts Integer  -- ^ Ok, return count of free slots:w
 
 -- | Determine if a Task can run based on its schedule and trigger
 -- and inspecting a list of tasks that are already running or ready
 -- The result will either be the number of unused instances remaning
 -- or the remaining balance of time left between launch cycles
-_canRunTask :: Task Ready -> [Task a] -> Either Double Integer
-_canRunTask task = canRun . remainders . dropWhile ((/= taskName task) . taskName)
+_taskRunStatus :: Task Ready -> [Task a] -> RunStatus
+_taskRunStatus task = uncurry canRun . remainders . dropWhile ((/= taskName task) . taskName)
   where
-    readyTimeDelta = realToFrac . (flip diffUTCTime $ taskReadyTime task) . taskReadyTime
-    recentLaunches = takeWhile ((< taskLaunchRate task) . readyTimeDelta)
-    remainders     = (((taskInstMax task -) . genericLength) &&& (listToMaybe . recentLaunches))
-    canRun (n,t)   = maybe (Right n) (Left) t
-
-    taskName       = _tcName . _tConf
-    taskReadyTime  = _tsReadyTime . _tSched
-    taskLaunchRate = _tcLaunchRate . _tcTrigger . _tConf
-    taskInstMax    = _tcMaxInstances . _tcTrigger . _tConf
+    readyTimeDelta   = realToFrac . (flip diffUTCTime $ taskReadyTime task) . taskReadyTime
+    recentLaunches   = takeWhile (< taskLaunchRate task) . map readyTimeDelta
+    remainders       = (((taskInstMax task -) . genericLength) &&& (listToMaybe . recentLaunches))
+    canRun 0 Nothing = ZeroFreeInsts
+    canRun n Nothing = FreeInsts n
+    canRun _ (Just t)= DelayLaunch t
+    taskName         = _tcName . _tConf
+    taskReadyTime    = _tsReadyTime . _tSched
+    taskLaunchRate   = _tcLaunchRate . _tcTrigger . _tConf
+    taskInstMax      = _tcMaxInstances . _tcTrigger . _tConf
 
 -- | Put a 'TaskConf' into the bullpen to await offers
 -- If the current environment cannot accept the task an
 -- error will be reported Left, otherwise the taskId of the 
 -- accepted task will be returned Right
-runTaskConf :: TaskConf -> ServerState -> IO (Either Text MZ.TaskID)
+runTaskConf :: TaskConf -> ServerState -> IO (Either RunStatus MZ.TaskID)
 runTaskConf conf server = do
     tid  <- randomTaskID conf
     task <- newTask conf tid
@@ -137,9 +145,9 @@ runTaskConf conf server = do
         bullpen <- readTVar tvarB >>= return . toTaskList
         let readyTasks     = map fromReadyTask bullpen
             runningTasks   = map fromRunningTask arena
-        case _canRunTask (readyTasks ++ runningTasks) task of
-            Left n | n > 0 -> modifyTVar' tvarB (M.insert tid task) >> return (Right tid)
-            Right t        -> return $ Left $ "Delay relaunch rate exceeded: " <> (show t)
+        case _taskRunStatus task (readyTasks ++ runningTasks) of
+            FreeInsts _ -> modifyTVar' tvarB (M.insert tid task) >> return (Right tid)
+            runStat     -> return $ Left runStat
   where
     tvarA          = _arena server
     tvarB          = _bullpen server
@@ -205,14 +213,29 @@ killTask :: MZ.TaskID -> ServerState -> IO MZ.Status
 killTask tid server = (atomically $ readTMVar $ _driver server) >>= flip MZ.killTask tid
 
 -- | The nursery loop waits on the _nursery TChan
--- and runs the task configuration 
+-- and runs the task configurations which arrive on it
+-- For a given task conf it will continue to run the conf
+-- until it either hits a launch delay, in which case it will
+-- write the conf back to the chan, or it will discard the conf
+-- if the slots are exhausted
+nurseryLoop :: ServerState -> IO ()
+nurseryLoop server = forever $ (atomically $ readTChan tchanN) >>= runInstances >>= putBackMaybe
+  where
+    log = const $ return ()
+    tchanN = _nursery server
+    runInstances conf = runTaskConf conf server >>= \case
+        Right tid            -> log tid >> runInstances conf
+        Left ZeroFreeInsts   -> return Nothing
+        Left (DelayLaunch n) -> return (Just conf)
+    putBackMaybe Nothing     = return ()
+    putBackMaybe (Just conf) = atomically $ writeTChan tchanN conf
 
 -- | The mortician loop waits on the _mortuary TChan
 -- and will either send tasks off to the garbage collector
 -- or it will put them back in the bullpen if they should
 -- be restarted
 morticianLoop :: ServerState -> IO ()
-morticianLoop server = (atomically $ readTChan tchanM) >>= relaunch >>= log
+morticianLoop server = forever $ (atomically $ readTChan tchanM) >>= relaunch >>= log
   where
     log = const $ return () -- TODO: Logging
     tchanM = _mortuary server
@@ -222,6 +245,6 @@ morticianLoop server = (atomically $ readTChan tchanM) >>= relaunch >>= log
                     in if _tcRelaunchOnExit trigger
                             then getTaskConf name server >>= maybe (return noTask) reRun
                             else return noRequest
-    noTask = Left "task not in library. cannot relaunch"
-    noRequest = Left "no relauch requested"
-    reRun conf = (atomically $ writeTChan tchanN) >> Right "relaunched"
+    noTask = Left $ T.pack "task not in library. cannot relaunch"
+    noRequest = Left $ T.pack "no relauch requested"
+    reRun conf = (atomically $ writeTChan tchanN conf) >> (return $ Right $ T.pack "relaunched")
